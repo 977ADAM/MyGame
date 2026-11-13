@@ -1,6 +1,25 @@
 
 #include <raylib.h>
 
+// Типы предметов
+enum class ItemType {
+    Empty,
+    IronOre,
+    Coal
+};
+
+// Максимальный размер стака
+int GetMaxStack(ItemType type) {
+    if (type == ItemType::IronOre) {
+        return 100;
+    }
+    else if (type == ItemType::Coal) {
+        return 200;
+    }
+
+    return 100;
+}
+
 int main() {
     InitWindow(800, 450, "My Game");
 
@@ -11,6 +30,7 @@ int main() {
     bool coinCollected = false;
     int speed = 7;
     int score = 0;
+    bool inventoryOpen = false;
 
     SetTargetFPS(60);
     
@@ -22,10 +42,38 @@ int main() {
         Empty,
         Wall,
         Gear,
-        Generator
+        Generator,
+        IronOre,
+        Coal
     };
     
+    struct InventorySlot {
+        ItemType type;
+        int amount;
+    };
+    
+    InventorySlot inventory[5] = {
+        {ItemType::IronOre, 0},
+        {ItemType::Coal, 0},
+        {ItemType::Empty, 0},
+        {ItemType::Empty, 0},
+        {ItemType::Empty, 0}
+    };
+    
+    inventory[0] = {ItemType::IronOre, 60};
+    inventory[1] = {ItemType::IronOre, 70};
+    
+    int selectedSlot = -1;
+    
     TileType grid[ROWS][COLS] = {};
+    
+    grid[10][15] = TileType::IronOre;
+    grid[10][16] = TileType::IronOre;
+    grid[11][15] = TileType::IronOre;
+    grid[11][16] = TileType::IronOre;
+    
+    grid[5][9] = TileType::Coal;
+    grid[5][10] = TileType::Coal;
     
     // ==========================================
     // BUILDING — Выбранный тип объекта
@@ -94,6 +142,10 @@ int main() {
             selectedTile = TileType::Generator;
         }
         
+        if (IsKeyPressed(KEY_ZERO)) {
+            selectedTile = TileType::Empty;
+        }
+        
         // ==========================================
         // BUILDING — Проверка возможности строительства
         // ==========================================
@@ -142,16 +194,181 @@ int main() {
                 !wallCollision;
 
             // ЛКМ — строим
-            if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && canBuild) {
+            if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && canBuild && !inventoryOpen) {
                 grid[cellY][cellX] = selectedTile;
             }
 
             // ПКМ — удаляем
-            if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+            if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !inventoryOpen) {
                 grid[cellY][cellX] = TileType::Empty;
             }
         }
 
+        // ==========================================
+        // MINING — Добыча рукой
+        // ==========================================
+
+        if (selectedTile == TileType::Empty &&
+            insideMap &&
+            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !inventoryOpen) {
+
+            if (grid[cellY][cellX] == TileType::IronOre ||
+                grid[cellY][cellX] == TileType::Coal) {
+
+                Vector2 playerCenter = {
+                    (float)x + 20,
+                    (float)y + 20
+                };
+
+                Vector2 oreCenter = {
+                    (float)(cellX * TILE_SIZE + 10),
+                    (float)(cellY * TILE_SIZE + 10)
+                };
+
+                if (CheckCollisionPointCircle(oreCenter, playerCenter, 60.0f)) {
+
+                    ItemType minedType = ItemType::Empty;
+
+                    // Определяем, какой ресурс добыли
+                    if (grid[cellY][cellX] == TileType::IronOre) {
+                        minedType = ItemType::IronOre;
+                    }
+                    else if (grid[cellY][cellX] == TileType::Coal) {
+                        minedType = ItemType::Coal;
+                    }
+                    
+                    int maxStack = GetMaxStack(minedType);
+
+                    bool itemAdded = false;
+
+                    // Ищем слот с таким же предметом, в котором есть место
+                    for (int i = 0; i < 5; i++) {
+
+                        if (inventory[i].type == minedType &&
+                            inventory[i].amount < maxStack) {
+
+                            inventory[i].amount += 1;
+                            itemAdded = true;
+                            break;
+                        }
+                    }
+
+                    // Если подходящего предмета нет, ищем пустой слот
+                    if (!itemAdded) {
+                        for (int i = 0; i < 5; i++) {
+
+                            if (inventory[i].type == ItemType::Empty || inventory[i].amount == 0) {
+                                inventory[i].type = minedType;
+                                inventory[i].amount = 1;
+                                itemAdded = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Удаляем руду только после добавления в инвентарь
+                    if (itemAdded) {
+                        grid[cellY][cellX] = TileType::Empty;
+                    }
+
+                }
+            }
+        }
+        
+        if (IsKeyPressed(KEY_E)) {
+            inventoryOpen = !inventoryOpen;
+        }
+        
+        // Перемещение предметов в инвентаре
+        if (inventoryOpen) {
+
+            // Нажали ЛКМ — выбираем предмет
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+
+                selectedSlot = -1;
+
+                for (int i = 0; i < 5; i++) {
+
+                    Rectangle slot = {
+                        (float)(220 + i * 70),
+                        150,
+                        60,
+                        60
+                    };
+
+                    if (CheckCollisionPointRec(mouse, slot) &&
+                        inventory[i].amount > 0) {
+
+                        selectedSlot = i;
+                        break;
+                    }
+                }
+            }
+
+            // Отпустили ЛКМ — перемещаем предмет
+            if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) &&
+                selectedSlot != -1) {
+
+                for (int i = 0; i < 5; i++) {
+
+                    Rectangle slot = {
+                        (float)(220 + i * 70),
+                        150,
+                        60,
+                        60
+                    };
+
+                    if (CheckCollisionPointRec(mouse, slot)) {
+
+                        if (selectedSlot != i) {
+
+                            // Если предметы одинаковые
+                            if (inventory[selectedSlot].type == inventory[i].type &&
+                                inventory[i].type != ItemType::Empty) {
+
+                                // Сколько свободного места в целевом слоте
+                                int freeSpace = GetMaxStack(inventory[i].type)
+                                                - inventory[i].amount;
+
+                                // Сколько предметов хотим переместить
+                                int moveCount = inventory[selectedSlot].amount;
+
+                                // Не превышаем ограничение стака
+                                if (moveCount > freeSpace) {
+                                    moveCount = freeSpace;
+                                }
+
+                                // Перемещаем предметы
+                                if (moveCount > 0) {
+                                    inventory[i].amount += moveCount;
+                                    inventory[selectedSlot].amount -= moveCount;
+                                }
+
+                                // Если исходный слот опустел
+                                if (inventory[selectedSlot].amount == 0) {
+                                    inventory[selectedSlot].type = ItemType::Empty;
+                                }
+                            }
+                            else {
+                                // Разные предметы — меняем местами
+                                InventorySlot temp = inventory[selectedSlot];
+
+                                inventory[selectedSlot] = inventory[i];
+                                inventory[i] = temp;
+                            }
+                        }
+
+                        break;
+                    }
+                }
+
+                selectedSlot = -1;
+            }
+        }
+        else {
+            selectedSlot = -1;
+        }
+        
         BeginDrawing();
 
         ClearBackground(RAYWHITE);
@@ -171,6 +388,12 @@ int main() {
                 }
                 else if (tile == TileType::Gear) {
                     color = ORANGE;
+                }
+                else if (tile == TileType::IronOre) {
+                    color = BROWN;
+                }
+                else if (tile == TileType::Coal) {
+                    color = BLACK;
                 }
                 else {
                     continue;
@@ -195,6 +418,12 @@ int main() {
         }
         
         DrawText(TextFormat("Score: %i", score), 10, 10, 20, BLACK);
+        
+        DrawText(
+            TextFormat("Iron: %i", inventory[0].amount),
+            10, 35, 20, DARKBROWN
+        );
+        
         DrawRectangle(x, y, 40, 40, BLUE);
         DrawRectangleRec(wall, RED);
         if (!coinCollected) {
@@ -270,6 +499,80 @@ int main() {
             TextFormat("Selected: %s", selectedName),
             20, 410, 20, WHITE
         );
+        
+        if (inventoryOpen) {
+            DrawRectangle(200, 80, 400, 290, DARKGRAY);
+
+            DrawText("Inventory", 220, 100, 30, WHITE);
+
+            for (int i = 0; i < 5; i++) {
+                int slotX = 220 + i * 70;
+                int slotY = 150;
+
+                // Рисуем слот
+                DrawRectangle(slotX, slotY, 60, 60, GRAY);
+                DrawRectangleLines(slotX, slotY, 60, 60, WHITE);
+                
+                if (selectedSlot == i) {
+                    DrawRectangleLinesEx(
+                        {(float)slotX, (float)slotY, 60, 60},
+                        3,
+                        YELLOW
+                    );
+                }
+
+                // Если слот не пустой
+                if (inventory[i].amount > 0 && i != selectedSlot) {
+
+                    // Пока железо может находиться только в слоте 0
+                    if (inventory[i].type == ItemType::IronOre) {
+                        DrawCircle(slotX + 30, slotY + 25, 15, BROWN);
+                    }
+                    else if (inventory[i].type == ItemType::Coal) {
+                        DrawCircle(slotX + 30, slotY + 25, 15, BLACK);
+                    }
+
+                    // Показываем количество предметов
+                    DrawText(
+                        TextFormat("%i", inventory[i].amount),
+                        slotX + 40,
+                        slotY + 40,
+                        16,
+                        WHITE
+                    );
+                }
+            }
+            
+            // Предмет, который мы перетаскиваем
+            if (selectedSlot != -1) {
+
+                InventorySlot item = inventory[selectedSlot];
+
+                Color itemColor = BROWN;
+
+                if (item.type == ItemType::Coal) {
+                    itemColor = BLACK;
+                }
+
+                // Рисуем предмет под курсором
+                DrawCircle(
+                    (int)mouse.x,
+                    (int)mouse.y,
+                    15,
+                    itemColor
+                );
+
+                // Показываем количество
+                DrawText(
+                    TextFormat("%i", item.amount),
+                    (int)mouse.x + 10,
+                    (int)mouse.y + 10,
+                    16,
+                    WHITE
+                );
+            }
+
+        }
         
         EndDrawing();
     }
