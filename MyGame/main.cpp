@@ -60,10 +60,10 @@ int main() {
         {ItemType::Empty, 0}
     };
     
-    inventory[0] = {ItemType::IronOre, 60};
-    inventory[1] = {ItemType::IronOre, 70};
+    inventory[0] = {ItemType::IronOre, 80};
     
     int selectedSlot = -1;
+    int splitSource = -1;
     
     TileType grid[ROWS][COLS] = {};
     
@@ -277,6 +277,10 @@ int main() {
         
         if (IsKeyPressed(KEY_E)) {
             inventoryOpen = !inventoryOpen;
+            
+            if (!inventoryOpen) {
+                splitSource = -1;
+            }
         }
         
         // Перемещение предметов в инвентаре
@@ -284,6 +288,8 @@ int main() {
 
             // Нажали ЛКМ — выбираем предмет
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                
+                splitSource = -1;
 
                 selectedSlot = -1;
 
@@ -364,6 +370,61 @@ int main() {
 
                 selectedSlot = -1;
             }
+            
+            if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) &&
+                selectedSlot == -1) {
+                
+                bool clickedSlot = false;
+
+                for (int i = 0; i < 5; i++) {
+
+                    Rectangle slot = {
+                        (float)(220 + i * 70),
+                        150,
+                        60,
+                        60
+                    };
+
+                    if (CheckCollisionPointRec(mouse, slot)) {
+                        
+                        clickedSlot = true;
+
+                        // Первый ПКМ — выбираем исходный слот
+                        if (splitSource == -1) {
+
+                            if (inventory[i].amount >= 2) {
+                                splitSource = i;
+                            }
+                        }
+                        // Второй ПКМ — выбираем место назначения
+                        else {
+
+                            if (i != splitSource &&
+                                inventory[i].amount == 0) {
+
+                                int half =
+                                    inventory[splitSource].amount / 2;
+
+                                inventory[i].type =
+                                    inventory[splitSource].type;
+
+                                inventory[i].amount = half;
+
+                                inventory[splitSource].amount -= half;
+                            }
+
+                            splitSource = -1;
+                        }
+
+                        break;
+                    }
+                }
+                
+                if (!clickedSlot) {
+                    splitSource = -1;
+                }
+            }
+            
         }
         else {
             selectedSlot = -1;
@@ -513,6 +574,14 @@ int main() {
                 DrawRectangle(slotX, slotY, 60, 60, GRAY);
                 DrawRectangleLines(slotX, slotY, 60, 60, WHITE);
                 
+                if (splitSource == i) {
+                    DrawRectangleLinesEx(
+                        {(float)slotX, (float)slotY, 60, 60},
+                        3,
+                        SKYBLUE
+                    );
+                }
+                
                 if (selectedSlot == i) {
                     DrawRectangleLinesEx(
                         {(float)slotX, (float)slotY, 60, 60},
@@ -543,6 +612,41 @@ int main() {
                 }
             }
             
+            
+            if (splitSource != -1) {
+
+                // Получаем предмет из выбранного слота
+                InventorySlot item = inventory[splitSource];
+
+                // Вычисляем половину
+                int half = item.amount / 2;
+
+                // Выбираем цвет предмета
+                Color itemColor = BROWN;
+
+                if (item.type == ItemType::Coal) {
+                    itemColor = BLACK;
+                }
+
+                // Рисуем полупрозрачный предмет возле мыши
+                DrawCircle(
+                    (int)mouse.x,
+                    (int)mouse.y,
+                    15,
+                    Fade(itemColor, 0.7f)
+                );
+
+                // Показываем количество переносимых предметов
+                DrawText(
+                    TextFormat("%i", half),
+                    (int)mouse.x + 12,
+                    (int)mouse.y + 12,
+                    16,
+                    WHITE
+                );
+            }
+            
+            
             // Предмет, который мы перетаскиваем
             if (selectedSlot != -1) {
 
@@ -571,7 +675,99 @@ int main() {
                     WHITE
                 );
             }
+            
+            for (int i = 0; i < 5; i++) {
 
+                Rectangle slot = {
+                    (float)(220 + i * 70),
+                    150,
+                    60,
+                    60
+                };
+
+                // Мышь находится над слотом с предметом?
+                if (CheckCollisionPointRec(mouse, slot) &&
+                    inventory[i].amount > 0) {
+
+                    const char* itemName = "Unknown";
+
+                    if (inventory[i].type == ItemType::IronOre) {
+                        itemName = "Iron Ore";
+                    }
+                    else if (inventory[i].type == ItemType::Coal) {
+                        itemName = "Coal";
+                    }
+
+                    // Размер подсказки
+                    int tooltipWidth = MeasureText(itemName, 18) + 20;
+
+                    if (tooltipWidth < 160) {
+                        tooltipWidth = 160;
+                    }
+
+                    int tooltipX = (int)mouse.x + 15;
+                    int tooltipY = (int)mouse.y + 15;
+                    
+                    // Проверяем правую границу экрана
+                    if (tooltipX + tooltipWidth > GetScreenWidth()) {
+                        tooltipX = (int)mouse.x - tooltipWidth - 15;
+                    }
+
+                    // Проверяем нижнюю границу экрана
+                    if (tooltipY + 55 > GetScreenHeight()) {
+                        tooltipY = (int)mouse.y - 55 - 15;
+                    }
+
+                    // Защита от выхода за левую и верхнюю границы
+                    if (tooltipX < 0) {
+                        tooltipX = 0;
+                    }
+
+                    if (tooltipY < 0) {
+                        tooltipY = 0;
+                    }
+
+                    // Фон подсказки
+                    DrawRectangle(
+                        tooltipX,
+                        tooltipY,
+                        tooltipWidth,
+                        55,
+                        DARKGRAY
+                    );
+
+                    // Рамка
+                    DrawRectangleLines(
+                        tooltipX,
+                        tooltipY,
+                        tooltipWidth,
+                        55,
+                        GOLD
+                    );
+
+                    // Название предмета
+                    DrawText(
+                        itemName,
+                        tooltipX + 10,
+                        tooltipY + 7,
+                        18,
+                        WHITE
+                    );
+                    
+                    int maxStack = GetMaxStack(inventory[i].type);
+
+                    DrawText(
+                        TextFormat("Max stack: %i", maxStack),
+                        tooltipX + 10,
+                        tooltipY + 30,
+                        16,
+                        LIGHTGRAY
+                    );
+
+                    break;
+                }
+            }
+            
         }
         
         EndDrawing();
