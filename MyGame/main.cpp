@@ -22,6 +22,18 @@ int GetMaxStack(ItemType type) {
     return 100;
 }
 
+Rectangle GetInventorySlotRect(int index) {
+    int col = index % 5;
+    int row = index / 5;
+
+    return {
+        (float)(220 + col * 70),
+        (float)(115 + row * 65),
+        60,
+        60
+    };
+}
+
 int main() {
     InitWindow(800, 450, "My Game");
 
@@ -57,13 +69,9 @@ int main() {
         int amount;
     };
     
-    InventorySlot inventory[5] = {
-        {ItemType::IronOre, 0},
-        {ItemType::Coal, 0},
-        {ItemType::Empty, 0},
-        {ItemType::Empty, 0},
-        {ItemType::Empty, 0}
-    };
+    const int INVENTORY_SIZE = 20;
+
+    InventorySlot inventory[INVENTORY_SIZE] = {};
     
     int selectedSlot = -1;
     int splitSource = -1;
@@ -119,10 +127,10 @@ int main() {
     
     float miningCooldown = 0.0f;
     float hitAnimationTimer = 0.0f;
+    float inventoryFullTimer = 0.0f;
     Vector2 hitPosition = {0, 0};
 
     while (!WindowShouldClose()) {
-
 
         int oldX = x;
 
@@ -254,6 +262,10 @@ int main() {
         if (hitAnimationTimer > 0.0f) {
             hitAnimationTimer -= GetFrameTime();
         }
+        
+        if (inventoryFullTimer > 0.0f) {
+            inventoryFullTimer -= GetFrameTime();
+        }
 
         // ==========================================
         // MINING — Добыча рукой
@@ -277,8 +289,52 @@ int main() {
                     (float)(cellX * TILE_SIZE + 10),
                     (float)(cellY * TILE_SIZE + 10)
                 };
+                
+                // Определяем, какой предмет получим
+                ItemType resourceType = ItemType::Empty;
 
-                if (CheckCollisionPointCircle(oreCenter, playerCenter, 60.0f)) {
+                if (grid[cellY][cellX] == TileType::IronOre) {
+                    resourceType = ItemType::IronOre;
+                }
+                else if (grid[cellY][cellX] == TileType::Coal) {
+                    resourceType = ItemType::Coal;
+                }
+                else if (grid[cellY][cellX] == TileType::Boulder) {
+                    resourceType = ItemType::Stone;
+                }
+                else if (grid[cellY][cellX] == TileType::Tree) {
+                    resourceType = ItemType::Wood;
+                }
+
+                // Проверяем, есть ли место для предмета
+                bool hasSpace = false;
+
+                for (int i = 0; i < INVENTORY_SIZE; i++) {
+
+                    // Подходит пустой слот
+                    if (inventory[i].amount == 0) {
+                        hasSpace = true;
+                        break;
+                    }
+
+                    // Или неполная стопка такого же ресурса
+                    if (inventory[i].type == resourceType &&
+                        inventory[i].amount < GetMaxStack(resourceType)) {
+
+                        hasSpace = true;
+                        break;
+                    }
+                }
+                
+                bool inReach = CheckCollisionPointCircle(
+                    oreCenter, playerCenter, 60.0f
+                );
+
+                if (inReach && !hasSpace) {
+                    inventoryFullTimer = 1.0f;
+                }
+
+                if (inReach && hasSpace) {
                     
                     miningCooldown = 0.4f;
                     
@@ -369,19 +425,13 @@ int main() {
 
             // Нажали ЛКМ — выбираем предмет
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                
-                splitSource = -1;
 
+                splitSource = -1;
                 selectedSlot = -1;
 
-                for (int i = 0; i < 5; i++) {
+                for (int i = 0; i < INVENTORY_SIZE; i++) {
 
-                    Rectangle slot = {
-                        (float)(220 + i * 70),
-                        150,
-                        60,
-                        60
-                    };
+                    Rectangle slot = GetInventorySlotRect(i);
 
                     if (CheckCollisionPointRec(mouse, slot) &&
                         inventory[i].amount > 0) {
@@ -396,48 +446,39 @@ int main() {
             if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) &&
                 selectedSlot != -1) {
 
-                for (int i = 0; i < 5; i++) {
+                for (int i = 0; i < INVENTORY_SIZE; i++) {
 
-                    Rectangle slot = {
-                        (float)(220 + i * 70),
-                        150,
-                        60,
-                        60
-                    };
+                    Rectangle slot = GetInventorySlotRect(i);
 
                     if (CheckCollisionPointRec(mouse, slot)) {
 
                         if (selectedSlot != i) {
 
-                            // Если предметы одинаковые
+                            // Одинаковые предметы объединяем
                             if (inventory[selectedSlot].type == inventory[i].type &&
                                 inventory[i].type != ItemType::Empty) {
 
-                                // Сколько свободного места в целевом слоте
-                                int freeSpace = GetMaxStack(inventory[i].type)
-                                                - inventory[i].amount;
+                                int freeSpace =
+                                    GetMaxStack(inventory[i].type) -
+                                    inventory[i].amount;
 
-                                // Сколько предметов хотим переместить
                                 int moveCount = inventory[selectedSlot].amount;
 
-                                // Не превышаем ограничение стака
                                 if (moveCount > freeSpace) {
                                     moveCount = freeSpace;
                                 }
 
-                                // Перемещаем предметы
                                 if (moveCount > 0) {
                                     inventory[i].amount += moveCount;
                                     inventory[selectedSlot].amount -= moveCount;
                                 }
 
-                                // Если исходный слот опустел
                                 if (inventory[selectedSlot].amount == 0) {
                                     inventory[selectedSlot].type = ItemType::Empty;
                                 }
                             }
                             else {
-                                // Разные предметы — меняем местами
+                                // Разные предметы меняем местами
                                 InventorySlot temp = inventory[selectedSlot];
 
                                 inventory[selectedSlot] = inventory[i];
@@ -457,14 +498,9 @@ int main() {
                 
                 bool clickedSlot = false;
 
-                for (int i = 0; i < 5; i++) {
-
-                    Rectangle slot = {
-                        (float)(220 + i * 70),
-                        150,
-                        60,
-                        60
-                    };
+                for (int i = 0; i < INVENTORY_SIZE; i++) {
+                    
+                    Rectangle slot = GetInventorySlotRect(i);
 
                     if (CheckCollisionPointRec(mouse, slot)) {
                         
@@ -514,6 +550,10 @@ int main() {
         BeginDrawing();
 
         ClearBackground(RAYWHITE);
+        
+        if (inventoryFullTimer > 0.0f) {
+            DrawText("INVENTORY FULL", 10, 65, 20, RED);
+        }
         
         for (int row = 0; row < ROWS; row++) {
             for (int col = 0; col < COLS; col++) {
@@ -612,8 +652,16 @@ int main() {
         
         DrawText(TextFormat("Score: %i", score), 10, 10, 20, BLACK);
         
+        int ironCount = 0;
+
+        for (int i = 0; i < INVENTORY_SIZE; i++) {
+            if (inventory[i].type == ItemType::IronOre) {
+                ironCount += inventory[i].amount;
+            }
+        }
+
         DrawText(
-            TextFormat("Iron: %i", inventory[0].amount),
+            TextFormat("Iron: %i", ironCount),
             10, 35, 20, DARKBROWN
         );
         
@@ -708,13 +756,16 @@ int main() {
         );
         
         if (inventoryOpen) {
-            DrawRectangle(200, 80, 400, 290, DARKGRAY);
+            DrawRectangle(200, 60, 400, 330, DARKGRAY);
 
-            DrawText("Inventory", 220, 100, 30, WHITE);
+            DrawText("Inventory", 220, 75, 30, WHITE);
 
-            for (int i = 0; i < 5; i++) {
-                int slotX = 220 + i * 70;
-                int slotY = 150;
+            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                
+                Rectangle slot = GetInventorySlotRect(i);
+
+                int slotX = (int)slot.x;
+                int slotY = (int)slot.y;
 
                 // Рисуем слот
                 DrawRectangle(slotX, slotY, 60, 60, GRAY);
@@ -834,14 +885,9 @@ int main() {
                 );
             }
             
-            for (int i = 0; i < 5; i++) {
+            for (int i = 0; i < INVENTORY_SIZE; i++) {
 
-                Rectangle slot = {
-                    (float)(220 + i * 70),
-                    150,
-                    60,
-                    60
-                };
+                Rectangle slot = GetInventorySlotRect(i);
 
                 // Мышь находится над слотом с предметом?
                 if (CheckCollisionPointRec(mouse, slot) &&
