@@ -5,7 +5,9 @@
 enum class ItemType {
     Empty,
     IronOre,
-    Coal
+    Coal,
+    Stone,
+    Wood
 };
 
 // Максимальный размер стака
@@ -45,7 +47,9 @@ int main() {
         Generator,
         IronOre,
         Coal,
-        Drill
+        Drill,
+        Boulder,
+        Tree
     };
     
     struct InventorySlot {
@@ -66,6 +70,7 @@ int main() {
     
     TileType grid[ROWS][COLS] = {};
     int durability[ROWS][COLS] = {};
+    int resourceAmount[ROWS][COLS] = {};
     
     grid[10][15] = TileType::IronOre;
     grid[10][16] = TileType::IronOre;
@@ -75,14 +80,32 @@ int main() {
     grid[5][9] = TileType::Coal;
     grid[5][10] = TileType::Coal;
     
+    grid[8][12] = TileType::Boulder;
+    grid[8][13] = TileType::Boulder;
+    grid[9][12] = TileType::Boulder;
+    
+    grid[7][8] = TileType::Tree;
+    grid[7][9] = TileType::Tree;
+    grid[8][8] = TileType::Tree;
+    
     for (int row = 0; row < ROWS; row++) {
         for (int col = 0; col < COLS; col++) {
 
             if (grid[row][col] == TileType::IronOre) {
                 durability[row][col] = 3;
+                resourceAmount[row][col] = 5;
             }
             else if (grid[row][col] == TileType::Coal) {
                 durability[row][col] = 2;
+                resourceAmount[row][col] = 5;
+            }
+            else if (grid[row][col] == TileType::Boulder) {
+                durability[row][col] = 5;
+                resourceAmount[row][col] = 1;
+            }
+            else if (grid[row][col] == TileType::Tree) {
+                durability[row][col] = 4;
+                resourceAmount[row][col] = 1;
             }
         }
     }
@@ -241,7 +264,9 @@ int main() {
             IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inventoryOpen && miningCooldown <= 0.0f) {
 
             if (grid[cellY][cellX] == TileType::IronOre ||
-                grid[cellY][cellX] == TileType::Coal) {
+                grid[cellY][cellX] == TileType::Coal ||
+                grid[cellY][cellX] == TileType::Boulder ||
+                grid[cellY][cellX] == TileType::Tree) {
 
                 Vector2 playerCenter = {
                     (float)x + 20,
@@ -272,6 +297,12 @@ int main() {
                         }
                         else if (grid[cellY][cellX] == TileType::Coal) {
                             minedType = ItemType::Coal;
+                        }
+                        else if (grid[cellY][cellX] == TileType::Boulder) {
+                            minedType = ItemType::Stone;
+                        }
+                        else if (grid[cellY][cellX] == TileType::Tree) {
+                            minedType = ItemType::Wood;
                         }
                         
                         int maxStack = GetMaxStack(minedType);
@@ -305,7 +336,19 @@ int main() {
                         
                         // Удаляем руду только после добавления в инвентарь
                         if (itemAdded) {
-                            grid[cellY][cellX] = TileType::Empty;
+                            resourceAmount[cellY][cellX]--;
+
+                            if (resourceAmount[cellY][cellX] <= 0) {
+                                grid[cellY][cellX] = TileType::Empty;
+                            }
+                            else {
+                                if (minedType == ItemType::IronOre) {
+                                    durability[cellY][cellX] = 3;
+                                }
+                                else if (minedType == ItemType::Coal) {
+                                    durability[cellY][cellX] = 2;
+                                }
+                            }
                         }
                     }
 
@@ -497,6 +540,12 @@ int main() {
                 else if (tile == TileType::Coal) {
                     color = BLACK;
                 }
+                else if (tile == TileType::Boulder) {
+                    color = DARKGRAY;
+                }
+                else if (tile == TileType::Tree) {
+                    color = DARKGREEN;
+                }
                 else {
                     continue;
                 }
@@ -510,9 +559,19 @@ int main() {
                 );
                 
                 if (tile == TileType::IronOre ||
-                    tile == TileType::Coal) {
+                    tile == TileType::Coal ||
+                    tile == TileType::Boulder ||
+                    tile == TileType::Tree) {
 
                     int maxDurability = 3;
+                    
+                    if (tile == TileType::Tree) {
+                        maxDurability = 4;
+                    }
+                    
+                    if (tile == TileType::Boulder) {
+                        maxDurability = 5;
+                    }
 
                     if (tile == TileType::Coal) {
                         maxDurability = 2;
@@ -680,12 +739,18 @@ int main() {
                 // Если слот не пустой
                 if (inventory[i].amount > 0 && i != selectedSlot) {
 
-                    // Пока железо может находиться только в слоте 0
+                    // Показываем в инвентаре
                     if (inventory[i].type == ItemType::IronOre) {
                         DrawCircle(slotX + 30, slotY + 25, 15, BROWN);
                     }
                     else if (inventory[i].type == ItemType::Coal) {
                         DrawCircle(slotX + 30, slotY + 25, 15, BLACK);
+                    }
+                    else if (inventory[i].type == ItemType::Stone) {
+                        DrawCircle(slotX + 30, slotY + 25, 15, DARKGRAY);
+                    }
+                    else if (inventory[i].type == ItemType::Wood) {
+                        DrawCircle(slotX + 30, slotY + 25, 15, DARKBROWN);
                     }
 
                     // Показываем количество предметов
@@ -744,6 +809,12 @@ int main() {
                 if (item.type == ItemType::Coal) {
                     itemColor = BLACK;
                 }
+                else if (item.type == ItemType::Stone) {
+                    itemColor = DARKGRAY;
+                }
+                else if (item.type == ItemType::Wood) {
+                    itemColor = DARKBROWN;
+                }
 
                 // Рисуем предмет под курсором
                 DrawCircle(
@@ -783,6 +854,12 @@ int main() {
                     }
                     else if (inventory[i].type == ItemType::Coal) {
                         itemName = "Coal";
+                    }
+                    else if (inventory[i].type == ItemType::Stone) {
+                        itemName = "Stone";
+                    }
+                    else if (inventory[i].type == ItemType::Wood) {
+                        itemName = "Wood";
                     }
 
                     // Размер подсказки
