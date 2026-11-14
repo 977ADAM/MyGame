@@ -44,7 +44,8 @@ int main() {
         Gear,
         Generator,
         IronOre,
-        Coal
+        Coal,
+        Drill
     };
     
     struct InventorySlot {
@@ -60,12 +61,11 @@ int main() {
         {ItemType::Empty, 0}
     };
     
-    inventory[0] = {ItemType::IronOre, 80};
-    
     int selectedSlot = -1;
     int splitSource = -1;
     
     TileType grid[ROWS][COLS] = {};
+    int durability[ROWS][COLS] = {};
     
     grid[10][15] = TileType::IronOre;
     grid[10][16] = TileType::IronOre;
@@ -75,12 +75,28 @@ int main() {
     grid[5][9] = TileType::Coal;
     grid[5][10] = TileType::Coal;
     
+    for (int row = 0; row < ROWS; row++) {
+        for (int col = 0; col < COLS; col++) {
+
+            if (grid[row][col] == TileType::IronOre) {
+                durability[row][col] = 3;
+            }
+            else if (grid[row][col] == TileType::Coal) {
+                durability[row][col] = 2;
+            }
+        }
+    }
+    
     // ==========================================
     // BUILDING — Выбранный тип объекта
     // ==========================================
 
     // Объект, который игрок собирается разместить
     TileType selectedTile = TileType::Wall;
+    
+    float miningCooldown = 0.0f;
+    float hitAnimationTimer = 0.0f;
+    Vector2 hitPosition = {0, 0};
 
     while (!WindowShouldClose()) {
 
@@ -140,6 +156,10 @@ int main() {
         // Клавиша 3 — генератор
         if (IsKeyPressed(KEY_THREE)) {
             selectedTile = TileType::Generator;
+        }
+
+        if (IsKeyPressed(KEY_FOUR)) {
+            selectedTile = TileType::Drill;
         }
         
         if (IsKeyPressed(KEY_ZERO)) {
@@ -203,6 +223,14 @@ int main() {
                 grid[cellY][cellX] = TileType::Empty;
             }
         }
+        
+        if (miningCooldown > 0.0f) {
+            miningCooldown -= GetFrameTime();
+        }
+        
+        if (hitAnimationTimer > 0.0f) {
+            hitAnimationTimer -= GetFrameTime();
+        }
 
         // ==========================================
         // MINING — Добыча рукой
@@ -210,7 +238,7 @@ int main() {
 
         if (selectedTile == TileType::Empty &&
             insideMap &&
-            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !inventoryOpen) {
+            IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inventoryOpen && miningCooldown <= 0.0f) {
 
             if (grid[cellY][cellX] == TileType::IronOre ||
                 grid[cellY][cellX] == TileType::Coal) {
@@ -226,49 +254,59 @@ int main() {
                 };
 
                 if (CheckCollisionPointCircle(oreCenter, playerCenter, 60.0f)) {
-
-                    ItemType minedType = ItemType::Empty;
-
-                    // Определяем, какой ресурс добыли
-                    if (grid[cellY][cellX] == TileType::IronOre) {
-                        minedType = ItemType::IronOre;
-                    }
-                    else if (grid[cellY][cellX] == TileType::Coal) {
-                        minedType = ItemType::Coal;
-                    }
                     
-                    int maxStack = GetMaxStack(minedType);
-
-                    bool itemAdded = false;
-
-                    // Ищем слот с таким же предметом, в котором есть место
-                    for (int i = 0; i < 5; i++) {
-
-                        if (inventory[i].type == minedType &&
-                            inventory[i].amount < maxStack) {
-
-                            inventory[i].amount += 1;
-                            itemAdded = true;
-                            break;
+                    miningCooldown = 0.4f;
+                    
+                    hitAnimationTimer = 0.15f;
+                    hitPosition = oreCenter;
+                    
+                    durability[cellY][cellX] -= 1;
+                    
+                    if (durability[cellY][cellX] <= 0) {
+                        
+                        ItemType minedType = ItemType::Empty;
+                        
+                        // Определяем, какой ресурс добыли
+                        if (grid[cellY][cellX] == TileType::IronOre) {
+                            minedType = ItemType::IronOre;
                         }
-                    }
-
-                    // Если подходящего предмета нет, ищем пустой слот
-                    if (!itemAdded) {
+                        else if (grid[cellY][cellX] == TileType::Coal) {
+                            minedType = ItemType::Coal;
+                        }
+                        
+                        int maxStack = GetMaxStack(minedType);
+                        
+                        bool itemAdded = false;
+                        
+                        // Ищем слот с таким же предметом, в котором есть место
                         for (int i = 0; i < 5; i++) {
-
-                            if (inventory[i].type == ItemType::Empty || inventory[i].amount == 0) {
-                                inventory[i].type = minedType;
-                                inventory[i].amount = 1;
+                            
+                            if (inventory[i].type == minedType &&
+                                inventory[i].amount < maxStack) {
+                                
+                                inventory[i].amount += 1;
                                 itemAdded = true;
                                 break;
                             }
                         }
-                    }
-
-                    // Удаляем руду только после добавления в инвентарь
-                    if (itemAdded) {
-                        grid[cellY][cellX] = TileType::Empty;
+                        
+                        // Если подходящего предмета нет, ищем пустой слот
+                        if (!itemAdded) {
+                            for (int i = 0; i < 5; i++) {
+                                
+                                if (inventory[i].type == ItemType::Empty || inventory[i].amount == 0) {
+                                    inventory[i].type = minedType;
+                                    inventory[i].amount = 1;
+                                    itemAdded = true;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // Удаляем руду только после добавления в инвентарь
+                        if (itemAdded) {
+                            grid[cellY][cellX] = TileType::Empty;
+                        }
                     }
 
                 }
@@ -450,6 +488,9 @@ int main() {
                 else if (tile == TileType::Gear) {
                     color = ORANGE;
                 }
+                else if (tile == TileType::Drill) {
+                    color = PURPLE;
+                }
                 else if (tile == TileType::IronOre) {
                     color = BROWN;
                 }
@@ -467,6 +508,38 @@ int main() {
                     TILE_SIZE,
                     color
                 );
+                
+                if (tile == TileType::IronOre ||
+                    tile == TileType::Coal) {
+
+                    int maxDurability = 3;
+
+                    if (tile == TileType::Coal) {
+                        maxDurability = 2;
+                    }
+
+                    // Текущая прочность
+                    int hp = durability[row][col];
+
+                    // Не допускаем отрицательной ширины
+                    if (hp < 0) {
+                        hp = 0;
+                    }
+
+                    // Ширина заполненной полоски
+                    int barWidth = 16 * hp / maxDurability;
+
+                    // Координаты полоски
+                    int barX = col * TILE_SIZE + 2;
+                    int barY = row * TILE_SIZE - 6;
+
+                    // Фон полоски
+                    DrawRectangle(barX, barY, 16, 4, DARKGRAY);
+
+                    // Оставшаяся прочность
+                    DrawRectangle(barX, barY, barWidth, 4, GREEN);
+                }
+
             }
         }
         
@@ -486,6 +559,17 @@ int main() {
         );
         
         DrawRectangle(x, y, 40, 40, BLUE);
+        
+        // Анимация удара
+        if (hitAnimationTimer > 0.0f) {
+            DrawCircleLines(
+                (int)hitPosition.x,
+                (int)hitPosition.y,
+                14,
+                ORANGE
+            );
+        }
+        
         DrawRectangleRec(wall, RED);
         if (!coinCollected) {
             DrawCircle(coinX, coinY, 15, GOLD);
@@ -551,6 +635,9 @@ int main() {
         }
         else if (selectedTile == TileType::Generator) {
             selectedName = "Generator";
+        }
+        else if (selectedTile == TileType::Drill) {
+            selectedName = "Drill";
         }
 
         // Рисуем интерфейс поверх игрового мира
