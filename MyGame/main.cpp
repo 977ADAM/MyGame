@@ -187,20 +187,24 @@ int main() {
         // Клавиша 1 — стена
         if (IsKeyPressed(KEY_ONE)) {
             selectedTile = TileType::Wall;
+            placingFurnace = false;
         }
 
         // Клавиша 2 — шестерёнка
         if (IsKeyPressed(KEY_TWO)) {
             selectedTile = TileType::Gear;
+            placingFurnace = false;
         }
 
         // Клавиша 3 — генератор
         if (IsKeyPressed(KEY_THREE)) {
             selectedTile = TileType::Generator;
+            placingFurnace = false;
         }
 
         if (IsKeyPressed(KEY_FOUR)) {
             selectedTile = TileType::Drill;
+            placingFurnace = false;
         }
         
         if (IsKeyPressed(KEY_ZERO)) {
@@ -256,7 +260,7 @@ int main() {
                 !wallCollision;
 
             // ЛКМ — строим
-            if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) &&
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
                 canBuild &&
                 !inventoryOpen &&
                 !placingFurnace &&
@@ -295,9 +299,16 @@ int main() {
                 }
             }
 
-            // ПКМ — удаляем
+            // Пока ПКМ удаляет только тестовые постройки.
+            // Разбор печи с возвратом в инвентарь добавим отдельно.
             if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !inventoryOpen) {
-                grid[cellY][cellX] = TileType::Empty;
+                TileType tile = grid[cellY][cellX];
+                if (tile == TileType::Wall ||
+                    tile == TileType::Gear ||
+                    tile == TileType::Generator ||
+                    tile == TileType::Drill) {
+                    grid[cellY][cellX] = TileType::Empty;
+                }
             }
         }
         
@@ -318,6 +329,7 @@ int main() {
         // ==========================================
 
         if (selectedTile == TileType::Empty &&
+            !placingFurnace &&
             insideMap &&
             IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inventoryOpen && miningCooldown <= 0.0f) {
 
@@ -412,7 +424,7 @@ int main() {
                         bool itemAdded = false;
                         
                         // Ищем слот с таким же предметом, в котором есть место
-                        for (int i = 0; i < 5; i++) {
+                        for (int i = 0; i < INVENTORY_SIZE; i++) {
                             
                             if (inventory[i].type == minedType &&
                                 inventory[i].amount < maxStack) {
@@ -425,7 +437,7 @@ int main() {
                         
                         // Если подходящего предмета нет, ищем пустой слот
                         if (!itemAdded) {
-                            for (int i = 0; i < 5; i++) {
+                            for (int i = 0; i < INVENTORY_SIZE; i++) {
                                 
                                 if (inventory[i].type == ItemType::Empty || inventory[i].amount == 0) {
                                     inventory[i].type = minedType;
@@ -483,6 +495,7 @@ int main() {
                         inventory[i].amount > 0) {
 
                         selectedSlot = i;
+                        placingFurnace = false;
                         break;
                     }
                 }
@@ -862,40 +875,13 @@ int main() {
         // RENDER — Предпросмотр строительства
         // ==========================================
 
-        // Проверяем, что курсор внутри карты
-        if (cellX >= 0 && cellX < COLS &&
-            cellY >= 0 && cellY < ROWS && insideMap && !inventoryOpen && !placingFurnace) {
-            
-            if (placingFurnace && insideMap && !inventoryOpen) {
+        if (insideMap && !inventoryOpen &&
+            (placingFurnace || selectedTile != TileType::Empty)) {
 
-                Color previewColor = MAROON;
-
-                if (!canBuild) {
-                    previewColor = RED;
-                }
-
-                DrawRectangle(
-                    cellX * TILE_SIZE,
-                    cellY * TILE_SIZE,
-                    TILE_SIZE,
-                    TILE_SIZE,
-                    Fade(previewColor, 0.5f)
-                );
-
-                DrawRectangleLines(
-                    cellX * TILE_SIZE,
-                    cellY * TILE_SIZE,
-                    TILE_SIZE,
-                    TILE_SIZE,
-                    previewColor
-                );
-            }
-
-            // Цвет зависит от выбранного механизма
             Color previewColor = GRAY;
 
-            if (selectedTile == TileType::Wall) {
-                previewColor = GRAY;
+            if (placingFurnace) {
+                previewColor = MAROON;
             }
             else if (selectedTile == TileType::Gear) {
                 previewColor = ORANGE;
@@ -903,8 +889,15 @@ int main() {
             else if (selectedTile == TileType::Generator) {
                 previewColor = GREEN;
             }
+            else if (selectedTile == TileType::Drill) {
+                previewColor = PURPLE;
+            }
 
-            // Полупрозрачная заливка клетки
+            // Запрет строительства обозначаем красным ДО рисования.
+            if (!canBuild) {
+                previewColor = RED;
+            }
+
             DrawRectangle(
                 cellX * TILE_SIZE,
                 cellY * TILE_SIZE,
@@ -913,7 +906,6 @@ int main() {
                 Fade(previewColor, 0.4f)
             );
 
-            // Рамка выбранной клетки
             DrawRectangleLines(
                 cellX * TILE_SIZE,
                 cellY * TILE_SIZE,
@@ -921,11 +913,6 @@ int main() {
                 TILE_SIZE,
                 previewColor
             );
-            
-            // Если строить нельзя, показываем красный цвет
-            if (!canBuild) {
-                previewColor = RED;
-            }
         }
 
         // ==========================================
@@ -947,7 +934,10 @@ int main() {
         else if (selectedTile == TileType::Drill) {
             selectedName = "Drill";
         }
-        
+        else if (selectedTile == TileType::Empty) {
+            selectedName = "Mining";
+        }
+
         if (placingFurnace) {
             selectedName = "Furnace";
         }
@@ -1104,6 +1094,15 @@ int main() {
 
                 if (item.type == ItemType::Coal) {
                     itemColor = BLACK;
+                }
+                else if (item.type == ItemType::Stone) {
+                    itemColor = DARKGRAY;
+                }
+                else if (item.type == ItemType::Wood) {
+                    itemColor = DARKBROWN;
+                }
+                else if (item.type == ItemType::Furnace) {
+                    itemColor = ORANGE;
                 }
 
                 // Рисуем полупрозрачный предмет возле мыши
