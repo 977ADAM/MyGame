@@ -10,7 +10,8 @@ enum class ItemType {
     Stone,
     Wood,
     Furnace,
-    BlankCard
+    BlankCard,
+    PunchedCard
 };
 
 // Максимальный размер стака
@@ -27,6 +28,9 @@ int GetMaxStack(ItemType type) {
 
     if (type == ItemType::BlankCard) {
         return 20;
+    }
+    if (type == ItemType::PunchedCard) {
+        return 1;
     }
 
     return 100;
@@ -48,6 +52,10 @@ Rectangle GetFurnaceSlotRect(int index) {
     return {25.0f, (float)(130 + index * 85), 60.0f, 60.0f};
 }
 
+Rectangle GetFurnaceReaderRect() {
+    return {25, 365, 150, 35};
+}
+
 Rectangle GetPunchHoleRect(int row, int column) {
     return {
         (float)(270 + column * 70),
@@ -55,6 +63,18 @@ Rectangle GetPunchHoleRect(int row, int column) {
         40,
         40
     };
+}
+
+void DrawPunchedCard(int x, int y, int command, int argument) {
+    DrawRectangle(x, y, 36, 22, BEIGE);
+    for (int i = 0; i < 4; i++) {
+        if (command & (8 >> i)) {
+            DrawCircle(x + 6 + i * 8, y + 6, 2, BLACK);
+        }
+        if (argument & (1 << i)) {
+            DrawCircle(x + 6 + i * 8, y + 16, 2, BLACK);
+        }
+    }
 }
 
 int main() {
@@ -91,6 +111,8 @@ int main() {
     struct InventorySlot {
         ItemType type;
         int amount;
+        int command = 0;
+        int argument = 0;
     };
 
     // Возвращает количество предметов, которые не поместились.
@@ -138,6 +160,7 @@ int main() {
     int selectedSlot = -1;
     int splitSource = -1;
     bool puncherOpen = false;
+    int puncherSlot = -1;
     bool commandHoles[4] = {};
     bool argumentHoles[4] = {};
     struct CraftOrder {
@@ -155,6 +178,7 @@ int main() {
     struct FurnaceStorage {
         InventorySlot ore = {};
         InventorySlot fuel = {};
+        InventorySlot reader = {};
     };
 
     FurnaceStorage furnaces[ROWS][COLS] = {};
@@ -464,7 +488,18 @@ int main() {
                     ItemType::Coal, furnace.fuel.amount
                 );
 
-                if (furnaceLeft == 0 && oreLeft == 0 && coalLeft == 0) {
+                bool cardFits = furnace.reader.amount == 0;
+                if (!cardFits) {
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+                        if (candidate[i].amount == 0) {
+                            candidate[i] = furnace.reader;
+                            cardFits = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (furnaceLeft == 0 && oreLeft == 0 && coalLeft == 0 && cardFits) {
                     // Всё помещается — применяем результат.
                     for (int i = 0; i < INVENTORY_SIZE; i++) {
                         inventory[i] = candidate[i];
@@ -642,6 +677,7 @@ int main() {
             IsKeyPressed(KEY_P)) {
 
             puncherOpen = true;
+            puncherSlot = selectedSlot;
             for (int i = 0; i < 4; i++) {
                 commandHoles[i] = false;
                 argumentHoles[i] = false;
@@ -653,6 +689,7 @@ int main() {
         if (IsKeyPressed(KEY_E)) {
             if (puncherOpen) {
                 puncherOpen = false;
+                puncherSlot = -1;
             }
             else {
                 inventoryOpen = !inventoryOpen;
@@ -876,6 +913,53 @@ int main() {
                 }
             }
 
+            // Установка карты сохраняет её команду и аргумент.
+            if (openedFurnaceX != -1 &&
+                openedFurnaceY != -1 &&
+                leftPressed &&
+                CheckCollisionPointRec(mouse, GetFurnaceReaderRect()) &&
+                selectedBeforeClick != -1 &&
+                selectedSlot != -1) {
+
+                FurnaceStorage& furnace =
+                    furnaces[openedFurnaceY][openedFurnaceX];
+                InventorySlot& source = inventory[selectedSlot];
+                if (source.type == ItemType::PunchedCard &&
+                    furnace.reader.amount == 0) {
+                    furnace.reader = source;
+                    source = {};
+                    selectedSlot = -1;
+                }
+            }
+
+            // Для извлечения карты нужен отдельный свободный слот.
+            if (openedFurnaceX != -1 &&
+                openedFurnaceY != -1 &&
+                leftPressed &&
+                selectedBeforeClick == -1 &&
+                CheckCollisionPointRec(mouse, GetFurnaceReaderRect())) {
+
+                FurnaceStorage& furnace =
+                    furnaces[openedFurnaceY][openedFurnaceX];
+                if (furnace.reader.amount > 0) {
+                    int freeSlot = -1;
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+                        if (inventory[i].amount == 0) {
+                            freeSlot = i;
+                            break;
+                        }
+                    }
+
+                    if (freeSlot != -1) {
+                        inventory[freeSlot] = furnace.reader;
+                        furnace.reader = {};
+                    }
+                    else {
+                        inventoryFullTimer = 1.0f;
+                    }
+                }
+            }
+
             if (rightPressed && selectedBeforeClick == -1) {
                 
                 bool clickedSlot = false;
@@ -1018,6 +1102,45 @@ int main() {
                     }
                 }
             }
+        }
+
+        // Проверяем место после крафта: готовый заказ мог занять свободный слот.
+        Rectangle punchButton = {185, 375, 170, 30};
+        bool hasBlank =
+            puncherSlot >= 0 &&
+            inventory[puncherSlot].type == ItemType::BlankCard &&
+            inventory[puncherSlot].amount > 0;
+        int punchedCardSlot = -1;
+
+        if (puncherOpen && hasBlank) {
+            if (inventory[puncherSlot].amount == 1) {
+                punchedCardSlot = puncherSlot;
+            }
+            else {
+                for (int i = 0; i < INVENTORY_SIZE; i++) {
+                    if (inventory[i].amount == 0) {
+                        punchedCardSlot = i;
+                        break;
+                    }
+                }
+            }
+        }
+
+        bool canPunch =
+            puncherOpen && hasBlank && validPattern && punchedCardSlot != -1;
+
+        if (canPunch &&
+            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+            CheckCollisionPointRec(mouse, punchButton)) {
+            inventory[puncherSlot].amount--;
+            if (inventory[puncherSlot].amount == 0) {
+                inventory[puncherSlot] = {};
+            }
+            inventory[punchedCardSlot] = {
+                ItemType::PunchedCard, 1, command, argument
+            };
+            puncherOpen = false;
+            puncherSlot = -1;
         }
 
         BeginDrawing();
@@ -1258,7 +1381,7 @@ int main() {
             DrawText("Inventory", 220, 75, 30, WHITE);
 
             if (openedFurnaceX != -1 && openedFurnaceY != -1) {
-                DrawRectangle(10, 60, 180, 330, DARKGRAY);
+                DrawRectangle(10, 60, 180, 350, DARKGRAY);
                 DrawText("Furnace", 25, 75, 24, WHITE);
 
                 const char* labels[] = {
@@ -1298,6 +1421,29 @@ int main() {
                 }
             }
             
+            if (openedFurnaceX != -1 && openedFurnaceY != -1) {
+                Rectangle readerRect = GetFurnaceReaderRect();
+                DrawRectangleRec(readerRect, GRAY);
+                DrawRectangleLinesEx(readerRect, 1, WHITE);
+
+                const InventorySlot& card =
+                    furnaces[openedFurnaceY][openedFurnaceX].reader;
+                if (card.amount == 0) {
+                    DrawText("Insert card", 35, 375, 16, LIGHTGRAY);
+                }
+                else {
+                    const char* name = "UNKNOWN";
+                    if (card.command == 1) name = "RUN";
+                    else if (card.command == 2) name = "BACK";
+                    else if (card.command == 3) name = "REVERSE";
+                    else if (card.command == 4) name = "SLOT";
+
+                    const char* label = card.command == 3
+                        ? name : TextFormat("%s %i", name, card.argument);
+                    DrawText(label, 35, 375, 18, GOLD);
+                }
+            }
+
             // Панель крафта справа от инвентаря.
             DrawRectangle(610, 60, 185, 365, DARKGRAY);
             DrawText("Crafting", 620, 75, 22, WHITE);
@@ -1402,6 +1548,12 @@ int main() {
                     if (inventory[i].type == ItemType::BlankCard) {
                         DrawRectangle(slotX + 12, slotY + 15, 36, 22, BEIGE);
                     }
+                    else if (inventory[i].type == ItemType::PunchedCard) {
+                        DrawPunchedCard(
+                            slotX + 12, slotY + 15,
+                            inventory[i].command, inventory[i].argument
+                        );
+                    }
 
                     // Показываем количество предметов
                     DrawText(
@@ -1485,7 +1637,13 @@ int main() {
                 }
 
                 // Рисуем выбранный предмет под курсором.
-                if (item.type == ItemType::BlankCard) {
+                if (item.type == ItemType::PunchedCard) {
+                    DrawPunchedCard(
+                        (int)mouse.x - 18, (int)mouse.y - 11,
+                        item.command, item.argument
+                    );
+                }
+                else if (item.type == ItemType::BlankCard) {
                     DrawRectangle(
                         (int)mouse.x - 18, (int)mouse.y - 11, 36, 22, BEIGE
                     );
@@ -1535,6 +1693,16 @@ int main() {
 
                     else if (inventory[i].type == ItemType::BlankCard) {
                         itemName = "Blank Card";
+                    }
+                    else if (inventory[i].type == ItemType::PunchedCard) {
+                        const char* name = "UNKNOWN";
+                        if (inventory[i].command == 1) name = "RUN";
+                        else if (inventory[i].command == 2) name = "BACK";
+                        else if (inventory[i].command == 3) name = "REVERSE";
+                        else if (inventory[i].command == 4) name = "SLOT";
+
+                        itemName = inventory[i].command == 3
+                            ? name : TextFormat("%s %i", name, inventory[i].argument);
                     }
 
                     // Размер подсказки
@@ -1620,7 +1788,7 @@ int main() {
         }
 
         if (puncherOpen) {
-            DrawRectangle(160, 35, 480, 380, DARKGRAY);
+            DrawRectangle(160, 35, 480, 405, DARKGRAY);
             DrawText("Card Puncher", 185, 50, 24, WHITE);
             DrawText("RUN 0001   BACK 0010", 185, 85, 18, LIGHTGRAY);
             DrawText("REVERSE 0011   SLOT 0100", 185, 110, 18, LIGHTGRAY);
@@ -1648,7 +1816,27 @@ int main() {
                 ? commandName
                 : TextFormat("%s %i", commandName, argument);
             DrawText(preview, 185, 325, 24, validPattern ? GREEN : RED);
-            DrawText("E: Close", 185, 380, 18, LIGHTGRAY);
+            const char* error = "";
+            if (!hasBlank) {
+                error = "NO BLANK CARD";
+            }
+            else if (command < 1 || command > 4) {
+                error = "UNKNOWN COMMAND";
+            }
+            else if (command == 3 && argument != 0) {
+                error = "REVERSE NEEDS NO ARGUMENT";
+            }
+            else if (command != 3 && argument == 0) {
+                error = "ARGUMENT REQUIRED";
+            }
+            else if (punchedCardSlot == -1) {
+                error = "INVENTORY FULL";
+            }
+
+            DrawText(error, 185, 352, 16, RED);
+            DrawRectangleRec(punchButton, canPunch ? GREEN : GRAY);
+            DrawText("Punch", 235, 381, 18, WHITE);
+            DrawText("E: Close", 185, 415, 18, LIGHTGRAY);
         }
 
         EndDrawing();
