@@ -12,7 +12,8 @@ enum class ItemType {
     Furnace,
     BlankCard,
     PunchedCard,
-    IronPlate
+    IronPlate,
+    Drill
 };
 
 // Максимальный размер стака
@@ -23,7 +24,7 @@ int GetMaxStack(ItemType type) {
     else if (type == ItemType::Coal) {
         return 200;
     }
-    else if (type == ItemType::Furnace) {
+    else if (type == ItemType::Furnace || type == ItemType::Drill) {
         return 10;
     }
 
@@ -173,6 +174,7 @@ int main() {
     float craftTimer = 0.0f;
     
     TileType grid[ROWS][COLS] = {};
+    TileType drillDeposits[ROWS][COLS] = {};
     int durability[ROWS][COLS] = {};
     int resourceAmount[ROWS][COLS] = {};
 
@@ -189,6 +191,9 @@ int main() {
     };
 
     FurnaceStorage furnaces[ROWS][COLS] = {};
+    
+    // Временно для проверки установки бура.
+    inventory[0] = {ItemType::Drill, 1};
     
     grid[10][15] = TileType::IronOre;
     grid[10][16] = TileType::IronOre;
@@ -235,6 +240,7 @@ int main() {
     // Объект, который игрок собирается разместить
     TileType selectedTile = TileType::Wall;
     bool placingFurnace = false;
+    bool placingDrill = false;
     
     float miningCooldown = 0.0f;
     float hitAnimationTimer = 0.0f;
@@ -299,28 +305,28 @@ int main() {
         if (IsKeyPressed(KEY_ONE)) {
             selectedTile = TileType::Wall;
             placingFurnace = false;
+            placingDrill = false;
         }
 
         // Клавиша 2 — шестерёнка
         if (IsKeyPressed(KEY_TWO)) {
             selectedTile = TileType::Gear;
             placingFurnace = false;
+            placingDrill = false;
         }
 
         // Клавиша 3 — генератор
         if (IsKeyPressed(KEY_THREE)) {
             selectedTile = TileType::Generator;
             placingFurnace = false;
+            placingDrill = false;
         }
 
-        if (IsKeyPressed(KEY_FOUR)) {
-            selectedTile = TileType::Drill;
-            placingFurnace = false;
-        }
         
         if (IsKeyPressed(KEY_ZERO)) {
             selectedTile = TileType::Empty;
             placingFurnace = false;
+            placingDrill = false;
         }
         
         // ==========================================
@@ -364,9 +370,16 @@ int main() {
             bool wallCollision =
                 CheckCollisionRecs(cell, wall);
 
-            // Строить можно, только если все условия выполнены
+            bool isDeposit =
+                grid[cellY][cellX] == TileType::IronOre ||
+                grid[cellY][cellX] == TileType::Coal;
+            bool suitableTile = placingDrill
+                ? isDeposit && resourceAmount[cellY][cellX] > 0
+                : isEmpty;
+
+            // Проверяем место для выбранной постройки.
             canBuild =
-                isEmpty &&
+                suitableTile &&
                 !playerCollision &&
                 !wallCollision;
 
@@ -374,7 +387,7 @@ int main() {
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
                 canBuild &&
                 !inventoryOpen &&
-                !placingFurnace &&
+                !placingFurnace && !placingDrill &&
                 selectedTile != TileType::Empty) {
 
                 grid[cellY][cellX] = selectedTile;
@@ -405,20 +418,40 @@ int main() {
 
                         // Выходим из режима размещения
                         placingFurnace = false;
+                        placingDrill = false;
 
                         break;
                     }
                 }
             }
 
+            // Установка изготовленного бура поверх залежи.
+            if (placingDrill &&
+                !inventoryOpen &&
+                canBuild &&
+                IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                for (int i = 0; i < INVENTORY_SIZE; i++) {
+                    if (inventory[i].type != ItemType::Drill ||
+                        inventory[i].amount == 0) {
+                        continue;
+                    }
+                    drillDeposits[cellY][cellX] = grid[cellY][cellX];
+                    grid[cellY][cellX] = TileType::Drill;
+                    inventory[i].amount--;
+                    if (inventory[i].amount == 0) {
+                        inventory[i] = {};
+                    }
+                    placingDrill = false;
+                    break;
+                }
+            }
+
             // Пока ПКМ удаляет только тестовые постройки.
-            // Разбор печи с возвратом в инвентарь добавим отдельно.
             if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !inventoryOpen) {
                 TileType tile = grid[cellY][cellX];
                 if (tile == TileType::Wall ||
                     tile == TileType::Gear ||
-                    tile == TileType::Generator ||
-                    tile == TileType::Drill) {
+                    tile == TileType::Generator) {
                     grid[cellY][cellX] = TileType::Empty;
                 }
             }
@@ -437,7 +470,7 @@ int main() {
         }
 
         // ==========================================
-        // Разбор печи
+        // Разбор печи или бура
         // ==========================================
 
         bool canDismantle = false;
@@ -445,7 +478,8 @@ int main() {
         if (insideMap &&
             !inventoryOpen &&
             IsMouseButtonDown(MOUSE_BUTTON_RIGHT) &&
-            grid[cellY][cellX] == TileType::Furnace) {
+            (grid[cellY][cellX] == TileType::Furnace ||
+             grid[cellY][cellX] == TileType::Drill)) {
 
             Vector2 playerCenter = {
                 (float)x + 20,
@@ -463,7 +497,7 @@ int main() {
         }
 
         if (canDismantle) {
-            // При переходе на другую печь начинаем заново.
+            // При переходе на другую постройку начинаем заново.
             if (dismantleX != cellX || dismantleY != cellY) {
                 dismantleX = cellX;
                 dismantleY = cellY;
@@ -475,58 +509,76 @@ int main() {
             if (dismantleTimer >= DISMANTLE_TIME) {
                 dismantleTimer = DISMANTLE_TIME;
 
-                FurnaceStorage& furnace = furnaces[cellY][cellX];
-
-                // Проверяем вместимость на копии инвентаря.
-                InventorySlot candidate[INVENTORY_SIZE];
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-                    candidate[i] = inventory[i];
-                }
-
-                int furnaceLeft = addToInventory(
-                    candidate, INVENTORY_SIZE, ItemType::Furnace, 1
-                );
-                int oreLeft = addToInventory(
-                    candidate, INVENTORY_SIZE,
-                    ItemType::IronOre,
-                    furnace.ore.amount + (furnace.smelting ? 1 : 0)
-                );
-                int platesLeft = addToInventory(
-                    candidate, INVENTORY_SIZE,
-                    ItemType::IronPlate, furnace.output.amount
-                );
-                int coalLeft = addToInventory(
-                    candidate, INVENTORY_SIZE,
-                    ItemType::Coal, furnace.fuel.amount
-                );
-
-                bool cardFits = furnace.reader.amount == 0;
-                if (!cardFits) {
-                    for (int i = 0; i < INVENTORY_SIZE; i++) {
-                        if (candidate[i].amount == 0) {
-                            candidate[i] = furnace.reader;
-                            cardFits = true;
-                            break;
-                        }
+                if (grid[cellY][cellX] == TileType::Drill) {
+                    int remaining = addToInventory(
+                        inventory, INVENTORY_SIZE, ItemType::Drill, 1
+                    );
+                    if (remaining == 0) {
+                        grid[cellY][cellX] = resourceAmount[cellY][cellX] > 0
+                            ? drillDeposits[cellY][cellX] : TileType::Empty;
+                        drillDeposits[cellY][cellX] = TileType::Empty;
+                        dismantleX = -1;
+                        dismantleY = -1;
+                        dismantleTimer = 0.0f;
                     }
-                }
-
-                if (furnaceLeft == 0 && oreLeft == 0 && coalLeft == 0 &&
-                    platesLeft == 0 && cardFits) {
-                    // Всё помещается — применяем результат.
-                    for (int i = 0; i < INVENTORY_SIZE; i++) {
-                        inventory[i] = candidate[i];
+                    else {
+                        inventoryFullTimer = 1.0f;
                     }
-
-                    furnace = {};
-                    grid[cellY][cellX] = TileType::Empty;
-
-                    dismantleX = -1;
-                    dismantleY = -1;
-                    dismantleTimer = 0.0f;
                 }
                 else {
-                    inventoryFullTimer = 1.0f;
+                    FurnaceStorage& furnace = furnaces[cellY][cellX];
+
+                    // Проверяем вместимость на копии инвентаря.
+                    InventorySlot candidate[INVENTORY_SIZE];
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+                        candidate[i] = inventory[i];
+                    }
+
+                    int furnaceLeft = addToInventory(
+                        candidate, INVENTORY_SIZE, ItemType::Furnace, 1
+                    );
+                    int oreLeft = addToInventory(
+                        candidate, INVENTORY_SIZE,
+                        ItemType::IronOre,
+                        furnace.ore.amount + (furnace.smelting ? 1 : 0)
+                    );
+                    int platesLeft = addToInventory(
+                        candidate, INVENTORY_SIZE,
+                        ItemType::IronPlate, furnace.output.amount
+                    );
+                    int coalLeft = addToInventory(
+                        candidate, INVENTORY_SIZE,
+                        ItemType::Coal, furnace.fuel.amount
+                    );
+
+                    bool cardFits = furnace.reader.amount == 0;
+                    if (!cardFits) {
+                        for (int i = 0; i < INVENTORY_SIZE; i++) {
+                            if (candidate[i].amount == 0) {
+                                candidate[i] = furnace.reader;
+                                cardFits = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (furnaceLeft == 0 && oreLeft == 0 && coalLeft == 0 &&
+                        platesLeft == 0 && cardFits) {
+                        // Всё помещается — применяем результат.
+                        for (int i = 0; i < INVENTORY_SIZE; i++) {
+                            inventory[i] = candidate[i];
+                        }
+
+                        furnace = {};
+                        grid[cellY][cellX] = TileType::Empty;
+
+                        dismantleX = -1;
+                        dismantleY = -1;
+                        dismantleTimer = 0.0f;
+                    }
+                    else {
+                        inventoryFullTimer = 1.0f;
+                    }
                 }
             }
         }
@@ -542,7 +594,7 @@ int main() {
         // ==========================================
 
         if (selectedTile == TileType::Empty &&
-            !placingFurnace &&
+            !placingFurnace && !placingDrill &&
             insideMap &&
             IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inventoryOpen && miningCooldown <= 0.0f) {
 
@@ -750,7 +802,7 @@ int main() {
 
         // Открываем печь отдельным кликом.
         if (!inventoryOpen &&
-            !placingFurnace &&
+            !placingFurnace && !placingDrill &&
             !furnacePlacedThisFrame &&
             insideMap &&
             IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
@@ -794,6 +846,7 @@ int main() {
 
                         selectedSlot = i;
                         placingFurnace = inventory[i].type == ItemType::Furnace;
+                        placingDrill = inventory[i].type == ItemType::Drill;
                         break;
                     }
                 }
@@ -881,6 +934,7 @@ int main() {
                         }
                         // Клик по исходному слоту отменяет выбор.
                         placingFurnace = false;
+                        placingDrill = false;
                         selectedSlot = -1;
                         break;
                     }
@@ -1036,6 +1090,7 @@ int main() {
         
         int stoneCount = 0;
         int woodCount = 0;
+        int plateCount = 0;
 
         for (int i = 0; i < INVENTORY_SIZE; i++) {
             if (inventory[i].type == ItemType::Stone) {
@@ -1044,10 +1099,14 @@ int main() {
             else if (inventory[i].type == ItemType::Wood) {
                 woodCount += inventory[i].amount;
             }
+            else if (inventory[i].type == ItemType::IronPlate) {
+                plateCount += inventory[i].amount;
+            }
         }
 
-        Rectangle craftButton = {615, 140, 170, 40};
-        Rectangle cardButton = {615, 235, 170, 40};
+        Rectangle craftButton = {615, 145, 170, 30};
+        Rectangle cardButton = {615, 225, 170, 30};
+        Rectangle drillButton = {615, 305, 170, 30};
 
         ItemType material = ItemType::Empty;
         CraftOrder order = {};
@@ -1064,6 +1123,11 @@ int main() {
                 material = ItemType::Wood;
                 required = 1;
                 order = {ItemType::BlankCard, 1.0f};
+            }
+            else if (CheckCollisionPointRec(mouse, drillButton) && plateCount >= 3) {
+                material = ItemType::IronPlate;
+                required = 3;
+                order = {ItemType::Drill, 3.0f};
             }
         }
 
@@ -1382,21 +1446,21 @@ int main() {
         // ==========================================
 
         if (insideMap && !inventoryOpen &&
-            (placingFurnace || selectedTile != TileType::Empty)) {
+            (placingFurnace || placingDrill || selectedTile != TileType::Empty)) {
 
             Color previewColor = GRAY;
 
             if (placingFurnace) {
                 previewColor = MAROON;
             }
+            else if (placingDrill) {
+                previewColor = PURPLE;
+            }
             else if (selectedTile == TileType::Gear) {
                 previewColor = ORANGE;
             }
             else if (selectedTile == TileType::Generator) {
                 previewColor = GREEN;
-            }
-            else if (selectedTile == TileType::Drill) {
-                previewColor = PURPLE;
             }
 
             // Запрет строительства обозначаем красным ДО рисования.
@@ -1446,6 +1510,9 @@ int main() {
 
         if (placingFurnace) {
             selectedName = "Furnace";
+        }
+        else if (placingDrill) {
+            selectedName = "Drill";
         }
 
         // Рисуем интерфейс поверх игрового мира
@@ -1552,52 +1619,64 @@ int main() {
             }
 
             // Панель крафта справа от инвентаря.
-            DrawRectangle(610, 60, 185, 365, DARKGRAY);
+            DrawRectangle(610, 60, 185, 375, DARKGRAY);
             DrawText("Crafting", 620, 75, 22, WHITE);
-            DrawText("Furnace", 620, 110, 20, WHITE);
+            DrawText("Furnace", 620, 105, 20, WHITE);
             DrawRectangleRec(craftButton, stoneCount >= 3 ? GREEN : GRAY);
-            DrawText("Craft Furnace", 625, 150, 17, WHITE);
+            DrawText("Craft Furnace", 625, 152, 17, WHITE);
             DrawText(
                 TextFormat("Stone: %i/3", stoneCount),
-                620, 185, 16, stoneCount >= 3 ? GREEN : RED
+                620, 127, 16, stoneCount >= 3 ? GREEN : RED
             );
 
-            DrawText("Blank Card", 620, 205, 20, WHITE);
+            DrawText("Blank Card", 620, 185, 20, WHITE);
             DrawRectangleRec(cardButton, woodCount >= 1 ? GREEN : GRAY);
-            DrawText("Craft Card", 625, 245, 17, WHITE);
+            DrawText("Craft Card", 625, 232, 17, WHITE);
             DrawText(
                 TextFormat("Wood: %i/1", woodCount),
-                620, 285, 18, woodCount >= 1 ? GREEN : RED
+                620, 207, 16, woodCount >= 1 ? GREEN : RED
             );
 
+            DrawText("Drill", 620, 265, 20, WHITE);
+            DrawText(
+                TextFormat("Plates: %i/3", plateCount),
+                620, 287, 16, plateCount >= 3 ? GREEN : RED
+            );
+            DrawRectangleRec(drillButton, plateCount >= 3 ? GREEN : GRAY);
+            DrawText("Craft Drill", 625, 312, 17, WHITE);
+
             if (!craftQueue.empty()) {
-                const char* craftingName =
-                    craftQueue.front().result == ItemType::Furnace
-                    ? "Furnace" : "Blank Card";
-                DrawText(craftingName, 620, 315, 18, WHITE);
+                const char* craftingName = "Furnace";
+                if (craftQueue.front().result == ItemType::BlankCard) {
+                    craftingName = "Blank Card";
+                }
+                else if (craftQueue.front().result == ItemType::Drill) {
+                    craftingName = "Drill";
+                }
+                DrawText(craftingName, 620, 345, 18, WHITE);
 
                 if (craftTimer > 0.0f) {
                     DrawText(
                         TextFormat("Time: %.1f", craftTimer),
-                        620, 340, 18, WHITE
+                        620, 365, 18, WHITE
                     );
                 }
                 else {
-                    DrawText("INVENTORY FULL", 620, 340, 16, RED);
+                    DrawText("INVENTORY FULL", 620, 365, 16, RED);
                 }
 
                 float progress = 1.0f - craftTimer / craftQueue.front().duration;
                 if (progress < 0.0f) progress = 0.0f;
                 if (progress > 1.0f) progress = 1.0f;
-                DrawRectangle(620, 365, 165, 14, GRAY);
-                DrawRectangle(620, 365, (int)(165 * progress), 14, GREEN);
-                DrawRectangleLines(620, 365, 165, 14, WHITE);
+                DrawRectangle(620, 390, 165, 14, GRAY);
+                DrawRectangle(620, 390, (int)(165 * progress), 14, GREEN);
+                DrawRectangleLines(620, 390, 165, 14, WHITE);
             }
 
             int waitingOrders = craftQueue.empty() ? 0 : (int)craftQueue.size() - 1;
             DrawText(
                 TextFormat("Queue: %i", waitingOrders),
-                620, 395, 18, WHITE
+                620, 410, 18, WHITE
             );
 
             for (int i = 0; i < INVENTORY_SIZE; i++) {
@@ -1645,6 +1724,9 @@ int main() {
                     }
                     else if (inventory[i].type == ItemType::IronPlate) {
                         DrawRectangle(slotX + 12, slotY + 18, 36, 14, LIGHTGRAY);
+                    }
+                    else if (inventory[i].type == ItemType::Drill) {
+                        DrawRectangle(slotX + 15, slotY + 10, 30, 30, PURPLE);
                     }
                     else if (inventory[i].type == ItemType::Furnace) {
                         DrawRectangle(
@@ -1700,6 +1782,9 @@ int main() {
                 else if (item.type == ItemType::Furnace) {
                     itemColor = ORANGE;
                 }
+                else if (item.type == ItemType::Drill) {
+                    itemColor = PURPLE;
+                }
 
                 // Рисуем полупрозрачный предмет возле мыши.
                 if (item.type == ItemType::IronPlate) {
@@ -1750,6 +1835,9 @@ int main() {
                 }
                 else if (item.type == ItemType::Furnace) {
                     itemColor = ORANGE;
+                }
+                else if (item.type == ItemType::Drill) {
+                    itemColor = PURPLE;
                 }
 
                 // Рисуем выбранный предмет под курсором.
@@ -1813,6 +1901,9 @@ int main() {
                     }
                     else if (inventory[i].type == ItemType::Furnace) {
                         itemName = "Furnace";
+                    }
+                    else if (inventory[i].type == ItemType::Drill) {
+                        itemName = "Drill";
                     }
 
                     else if (inventory[i].type == ItemType::BlankCard) {
