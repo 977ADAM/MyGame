@@ -1,5 +1,6 @@
 
 #include <raylib.h>
+#include <queue>
 
 // Типы предметов
 enum class ItemType {
@@ -8,7 +9,8 @@ enum class ItemType {
     Coal,
     Stone,
     Wood,
-    Furnace
+    Furnace,
+    BlankCard
 };
 
 // Максимальный размер стака
@@ -21,6 +23,10 @@ int GetMaxStack(ItemType type) {
     }
     else if (type == ItemType::Furnace) {
         return 10;
+    }
+
+    if (type == ItemType::BlankCard) {
+        return 20;
     }
 
     return 100;
@@ -40,6 +46,15 @@ Rectangle GetInventorySlotRect(int index) {
 
 Rectangle GetFurnaceSlotRect(int index) {
     return {25.0f, (float)(130 + index * 85), 60.0f, 60.0f};
+}
+
+Rectangle GetPunchHoleRect(int row, int column) {
+    return {
+        (float)(270 + column * 70),
+        (float)(155 + row * 85),
+        40,
+        40
+    };
 }
 
 int main() {
@@ -122,10 +137,16 @@ int main() {
     
     int selectedSlot = -1;
     int splitSource = -1;
-    bool furnaceCrafting = false;
-    float furnaceCraftTimer = 0.0f;
-    bool furnaceWaiting = false;
-    int furnaceQueue = 0;
+    bool puncherOpen = false;
+    bool commandHoles[4] = {};
+    bool argumentHoles[4] = {};
+    struct CraftOrder {
+        ItemType result;
+        float duration;
+    };
+
+    std::queue<CraftOrder> craftQueue;
+    float craftTimer = 0.0f;
     
     TileType grid[ROWS][COLS] = {};
     int durability[ROWS][COLS] = {};
@@ -614,13 +635,62 @@ int main() {
             }
         }
         
+        if (inventoryOpen &&
+            !puncherOpen &&
+            selectedSlot != -1 &&
+            inventory[selectedSlot].type == ItemType::BlankCard &&
+            IsKeyPressed(KEY_P)) {
+
+            puncherOpen = true;
+            for (int i = 0; i < 4; i++) {
+                commandHoles[i] = false;
+                argumentHoles[i] = false;
+            }
+            selectedSlot = -1;
+            splitSource = -1;
+        }
+
         if (IsKeyPressed(KEY_E)) {
-            inventoryOpen = !inventoryOpen;
-            
-            if (!inventoryOpen) {
-                splitSource = -1;
+            if (puncherOpen) {
+                puncherOpen = false;
+            }
+            else {
+                inventoryOpen = !inventoryOpen;
+                if (!inventoryOpen) {
+                    splitSource = -1;
+                }
             }
         }
+
+        if (puncherOpen && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            for (int i = 0; i < 4; i++) {
+                if (CheckCollisionPointRec(mouse, GetPunchHoleRect(0, i))) {
+                    commandHoles[i] = !commandHoles[i];
+                }
+                if (CheckCollisionPointRec(mouse, GetPunchHoleRect(1, i))) {
+                    argumentHoles[i] = !argumentHoles[i];
+                }
+            }
+        }
+
+        int command = 0;
+        int argument = 0;
+        for (int i = 0; i < 4; i++) {
+            command = command * 2 + (commandHoles[i] ? 1 : 0);
+            if (argumentHoles[i]) {
+                argument += 1 << i;
+            }
+        }
+
+        const char* commandName = "UNKNOWN";
+        if (command == 1) commandName = "RUN";
+        else if (command == 2) commandName = "BACK";
+        else if (command == 3) commandName = "REVERSE";
+        else if (command == 4) commandName = "SLOT";
+
+        bool validPattern =
+            ((command == 1 || command == 2 || command == 4) && argument > 0) ||
+            (command == 3 && argument == 0);
         
         // Закрываем окно печи вместе с инвентарём.
         if (!inventoryOpen) {
@@ -656,13 +726,14 @@ int main() {
         }
 
         // Перемещение предметов в инвентаре
-        if (inventoryOpen) {
+        if (inventoryOpen && !puncherOpen) {
+            bool leftPressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+            bool rightPressed = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
+            int selectedBeforeClick = selectedSlot;
 
-            // Нажали ЛКМ — выбираем предмет
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-
+            // Первый клик выбирает стопку до следующего клика.
+            if (leftPressed && selectedBeforeClick == -1) {
                 splitSource = -1;
-                selectedSlot = -1;
 
                 for (int i = 0; i < INVENTORY_SIZE; i++) {
 
@@ -672,7 +743,7 @@ int main() {
                         inventory[i].amount > 0) {
 
                         selectedSlot = i;
-                        placingFurnace = false;
+                        placingFurnace = inventory[i].type == ItemType::Furnace;
                         break;
                     }
                 }
@@ -681,9 +752,8 @@ int main() {
             // Выгрузка предметов из печи по клику.
             if (openedFurnaceX != -1 &&
                 openedFurnaceY != -1 &&
-                selectedSlot == -1 &&
-                (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) ||
-                 IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))) {
+                selectedBeforeClick == -1 &&
+                (leftPressed || rightPressed)) {
                 FurnaceStorage& furnace =
                     furnaces[openedFurnaceY][openedFurnaceX];
 
@@ -715,44 +785,8 @@ int main() {
                 }
             }
 
-            // Отпустили ЛКМ — перемещаем предмет
-            if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) &&
-                selectedSlot != -1) {
-
-                if (openedFurnaceX != -1 && openedFurnaceY != -1) {
-                    FurnaceStorage& furnace =
-                        furnaces[openedFurnaceY][openedFurnaceX];
-
-                    InventorySlot& source = inventory[selectedSlot];
-                    InventorySlot* target = nullptr;
-
-                    if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(0)) &&
-                        source.type == ItemType::IronOre) {
-                        target = &furnace.ore;
-                    }
-                    else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(1)) &&
-                             source.type == ItemType::Coal) {
-                        target = &furnace.fuel;
-                    }
-
-                    if (target != nullptr) {
-                        int freeSpace = GetMaxStack(source.type) - target->amount;
-                        int moveCount = source.amount;
-                        if (moveCount > freeSpace) {
-                            moveCount = freeSpace;
-                        }
-
-                        if (moveCount > 0) {
-                            target->type = source.type;
-                            target->amount += moveCount;
-                            source.amount -= moveCount;
-                            if (source.amount == 0) {
-                                source.type = ItemType::Empty;
-                            }
-                        }
-                    }
-                }
-
+            // Следующий ЛКМ переносит стопку между слотами инвентаря.
+            if (leftPressed && selectedBeforeClick != -1) {
                 for (int i = 0; i < INVENTORY_SIZE; i++) {
 
                     Rectangle slot = GetInventorySlotRect(i);
@@ -792,25 +826,20 @@ int main() {
                                 inventory[i] = temp;
                             }
                         }
-                        else if (inventory[i].type == ItemType::Furnace &&
-                                 inventory[i].amount > 0) {
-
-                            placingFurnace = true;
-                        }
-
+                        // Клик по исходному слоту отменяет выбор.
+                        placingFurnace = false;
+                        selectedSlot = -1;
                         break;
                     }
                 }
-
-                selectedSlot = -1;
             }
-            
-            // ПКМ при перетаскивании кладёт один предмет в печь.
-            if (inventoryOpen &&
+
+            // Выбранная стопка: ЛКМ кладёт всё, ПКМ — один предмет.
+            if (selectedBeforeClick != -1 &&
+                selectedSlot != -1 &&
                 openedFurnaceX != -1 &&
                 openedFurnaceY != -1 &&
-                selectedSlot != -1 &&
-                IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+                (leftPressed || rightPressed)) {
 
                 FurnaceStorage& furnace =
                     furnaces[openedFurnaceY][openedFurnaceX];
@@ -827,23 +856,27 @@ int main() {
                     target = &furnace.fuel;
                 }
 
-                if (target != nullptr &&
-                    source.amount > 0 &&
-                    target->amount < GetMaxStack(source.type)) {
+                if (target != nullptr) {
+                    int moveCount = rightPressed ? 1 : source.amount;
+                    int freeSpace = GetMaxStack(source.type) - target->amount;
+                    if (moveCount > freeSpace) {
+                        moveCount = freeSpace;
+                    }
 
-                    target->type = source.type;
-                    target->amount++;
-                    source.amount--;
+                    if (moveCount > 0) {
+                        target->type = source.type;
+                        target->amount += moveCount;
+                        source.amount -= moveCount;
 
-                    if (source.amount == 0) {
-                        source.type = ItemType::Empty;
-                        selectedSlot = -1;
+                        if (source.amount == 0) {
+                            source.type = ItemType::Empty;
+                            selectedSlot = -1;
+                        }
                     }
                 }
             }
 
-            if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) &&
-                selectedSlot == -1) {
+            if (rightPressed && selectedBeforeClick == -1) {
                 
                 bool clickedSlot = false;
 
@@ -900,124 +933,93 @@ int main() {
         // CRAFTING
         // ==========================================
         
-        // Считаем камни во всех слотах
         int stoneCount = 0;
+        int woodCount = 0;
 
         for (int i = 0; i < INVENTORY_SIZE; i++) {
             if (inventory[i].type == ItemType::Stone) {
                 stoneCount += inventory[i].amount;
             }
+            else if (inventory[i].type == ItemType::Wood) {
+                woodCount += inventory[i].amount;
+            }
         }
 
-        // Кнопка крафта
         Rectangle craftButton = {615, 140, 170, 40};
+        Rectangle cardButton = {615, 235, 170, 40};
 
-        // Можно ли создать печь?
-        bool canCraftFurnace = stoneCount >= 3;
+        ItemType material = ItemType::Empty;
+        CraftOrder order = {};
+        int required = 0;
 
-        // Нажатие кнопки
-        if (inventoryOpen &&
-            canCraftFurnace &&
-            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-            CheckCollisionPointRec(mouse, craftButton)) {
+        if (inventoryOpen && !puncherOpen &&
+            IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            if (CheckCollisionPointRec(mouse, craftButton) && stoneCount >= 3) {
+                material = ItemType::Stone;
+                required = 3;
+                order = {ItemType::Furnace, 2.0f};
+            }
+            else if (CheckCollisionPointRec(mouse, cardButton) && woodCount >= 1) {
+                material = ItemType::Wood;
+                required = 1;
+                order = {ItemType::BlankCard, 1.0f};
+            }
+        }
 
-            int remaining = 3;
-
-            // Забираем 3 камня из инвентаря
-            for (int i = 0; i < INVENTORY_SIZE; i++) {
-
-                if (inventory[i].type != ItemType::Stone) {
+        if (required > 0) {
+            // Материалы расходуются при заказе.
+            for (int i = 0; i < INVENTORY_SIZE && required > 0; i++) {
+                if (inventory[i].type != material) {
                     continue;
                 }
 
                 int take = inventory[i].amount;
-
-                if (take > remaining) {
-                    take = remaining;
+                if (take > required) {
+                    take = required;
                 }
-
                 inventory[i].amount -= take;
-                remaining -= take;
+                required -= take;
 
                 if (inventory[i].amount == 0) {
                     inventory[i].type = ItemType::Empty;
+                    if (selectedSlot == i) {
+                        selectedSlot = -1;
+                    }
+                    if (splitSource == i) {
+                        splitSource = -1;
+                    }
                 }
+            }
 
+            bool wasEmpty = craftQueue.empty();
+            craftQueue.push(order);
+            if (wasEmpty) {
+                craftTimer = order.duration;
+            }
+        }
+
+        // Готовый заказ ждёт места и задерживает следующие заказы.
+        if (!craftQueue.empty()) {
+            if (craftTimer > 0.0f) {
+                craftTimer -= GetFrameTime();
+                if (craftTimer < 0.0f) {
+                    craftTimer = 0.0f;
+                }
+            }
+
+            if (craftTimer == 0.0f) {
+                int remaining = addToInventory(
+                    inventory, INVENTORY_SIZE, craftQueue.front().result, 1
+                );
                 if (remaining == 0) {
-                    break;
-                }
-            }
-
-            if (!furnaceCrafting && !furnaceWaiting &&
-                furnaceQueue == 0) {
-
-                // Если ничего не изготавливается,
-                // начинаем сразу
-                furnaceCrafting = true;
-                furnaceCraftTimer = 2.0f;
-            }
-            else {
-
-                // Иначе добавляем заказ в очередь
-                furnaceQueue++;
-            }
-        }
-        
-        // Обновляем время крафта
-        if (furnaceCrafting) {
-
-            furnaceCraftTimer -= GetFrameTime();
-
-            if (furnaceCraftTimer <= 0.0f) {
-                furnaceCraftTimer = 0.0f;
-                furnaceCrafting = false;
-                furnaceWaiting = true;
-            }
-        }
-        
-        if (furnaceWaiting) {
-
-            // Сначала ищем неполную стопку печей
-            for (int i = 0; i < INVENTORY_SIZE; i++) {
-
-                if (inventory[i].type == ItemType::Furnace &&
-                    inventory[i].amount < 10) {
-
-                    inventory[i].amount++;
-                    furnaceWaiting = false;
-                    break;
-                }
-            }
-
-            // Если подходящей стопки нет, ищем пустой слот
-            if (furnaceWaiting) {
-
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-
-                    if (inventory[i].amount == 0) {
-
-                        inventory[i].type = ItemType::Furnace;
-                        inventory[i].amount = 1;
-
-                        furnaceWaiting = false;
-                        break;
+                    craftQueue.pop();
+                    if (!craftQueue.empty()) {
+                        craftTimer = craftQueue.front().duration;
                     }
                 }
             }
         }
-        
-        // Если предыдущая печь получена,
-        // запускаем следующий заказ
-        if (!furnaceCrafting &&
-            !furnaceWaiting &&
-            furnaceQueue > 0) {
 
-            furnaceQueue--;
-
-            furnaceCrafting = true;
-            furnaceCraftTimer = 2.0f;
-        }
-        
         BeginDrawing();
 
         ClearBackground(RAYWHITE);
@@ -1296,66 +1298,53 @@ int main() {
                 }
             }
             
-            // Панель крафта справа от инвентаря
-            DrawRectangle(610, 60, 185, 255, DARKGRAY);
-
+            // Панель крафта справа от инвентаря.
+            DrawRectangle(610, 60, 185, 365, DARKGRAY);
             DrawText("Crafting", 620, 75, 22, WHITE);
-
             DrawText("Furnace", 620, 110, 20, WHITE);
-
+            DrawRectangleRec(craftButton, stoneCount >= 3 ? GREEN : GRAY);
+            DrawText("Craft Furnace", 625, 150, 17, WHITE);
             DrawText(
                 TextFormat("Stone: %i/3", stoneCount),
-                620, 195, 18,
-                stoneCount >= 3 ? GREEN : RED
+                620, 185, 16, stoneCount >= 3 ? GREEN : RED
             );
 
-            // Кнопка создания
-            DrawRectangleRec(
-                craftButton,
-                canCraftFurnace ? GREEN : GRAY
+            DrawText("Blank Card", 620, 205, 20, WHITE);
+            DrawRectangleRec(cardButton, woodCount >= 1 ? GREEN : GRAY);
+            DrawText("Craft Card", 625, 245, 17, WHITE);
+            DrawText(
+                TextFormat("Wood: %i/1", woodCount),
+                620, 285, 18, woodCount >= 1 ? GREEN : RED
             );
 
-            DrawText("Craft Furnace", 625, 150, 17, WHITE);
+            if (!craftQueue.empty()) {
+                const char* craftingName =
+                    craftQueue.front().result == ItemType::Furnace
+                    ? "Furnace" : "Blank Card";
+                DrawText(craftingName, 620, 315, 18, WHITE);
 
-            // Состояние крафта
-            if (furnaceCrafting) {
+                if (craftTimer > 0.0f) {
+                    DrawText(
+                        TextFormat("Time: %.1f", craftTimer),
+                        620, 340, 18, WHITE
+                    );
+                }
+                else {
+                    DrawText("INVENTORY FULL", 620, 340, 16, RED);
+                }
 
-                DrawText(
-                    TextFormat("Time: %.1f", furnaceCraftTimer),
-                    620, 225, 18, WHITE
-                );
-
-                // Вычисляем прогресс от 0 до 1
-                float progress = 1.0f - furnaceCraftTimer / 2.0f;
-
+                float progress = 1.0f - craftTimer / craftQueue.front().duration;
                 if (progress < 0.0f) progress = 0.0f;
                 if (progress > 1.0f) progress = 1.0f;
-
-                // Фон полоски
-                DrawRectangle(620, 260, 165, 14, GRAY);
-
-                // Заполненная часть
-                DrawRectangle(
-                    620, 260,
-                    (int)(165 * progress),
-                    14,
-                    GREEN
-                );
-
-                // Рамка
-                DrawRectangleLines(620, 260, 165, 14, WHITE);
+                DrawRectangle(620, 365, 165, 14, GRAY);
+                DrawRectangle(620, 365, (int)(165 * progress), 14, GREEN);
+                DrawRectangleLines(620, 365, 165, 14, WHITE);
             }
-            else if (furnaceWaiting) {
 
-                DrawText(
-                    "INVENTORY FULL",
-                    620, 225, 16, RED
-                );
-            }
-            
+            int waitingOrders = craftQueue.empty() ? 0 : (int)craftQueue.size() - 1;
             DrawText(
-                TextFormat("Queue: %i", furnaceQueue),
-                620, 285, 18, WHITE
+                TextFormat("Queue: %i", waitingOrders),
+                620, 395, 18, WHITE
             );
 
             for (int i = 0; i < INVENTORY_SIZE; i++) {
@@ -1410,6 +1399,10 @@ int main() {
                         );
                     }
 
+                    if (inventory[i].type == ItemType::BlankCard) {
+                        DrawRectangle(slotX + 12, slotY + 15, 36, 22, BEIGE);
+                    }
+
                     // Показываем количество предметов
                     DrawText(
                         TextFormat("%i", inventory[i].amount),
@@ -1446,8 +1439,14 @@ int main() {
                     itemColor = ORANGE;
                 }
 
-                // Рисуем полупрозрачный предмет возле мыши
-                DrawCircle(
+                // Рисуем полупрозрачный предмет возле мыши.
+                if (item.type == ItemType::BlankCard) {
+                    DrawRectangle(
+                        (int)mouse.x - 18, (int)mouse.y - 11,
+                        36, 22, Fade(BEIGE, 0.7f)
+                    );
+                }
+                else DrawCircle(
                     (int)mouse.x,
                     (int)mouse.y,
                     15,
@@ -1485,8 +1484,13 @@ int main() {
                     itemColor = ORANGE;
                 }
 
-                // Рисуем предмет под курсором
-                DrawCircle(
+                // Рисуем выбранный предмет под курсором.
+                if (item.type == ItemType::BlankCard) {
+                    DrawRectangle(
+                        (int)mouse.x - 18, (int)mouse.y - 11, 36, 22, BEIGE
+                    );
+                }
+                else DrawCircle(
                     (int)mouse.x,
                     (int)mouse.y,
                     15,
@@ -1527,6 +1531,10 @@ int main() {
                     }
                     else if (inventory[i].type == ItemType::Furnace) {
                         itemName = "Furnace";
+                    }
+
+                    else if (inventory[i].type == ItemType::BlankCard) {
+                        itemName = "Blank Card";
                     }
 
                     // Размер подсказки
@@ -1603,6 +1611,44 @@ int main() {
         
         if (inventoryFullTimer > 0.0f) {
             DrawText("INVENTORY FULL", 10, 65, 20, RED);
+        }
+
+        if (inventoryOpen && !puncherOpen &&
+            selectedSlot != -1 &&
+            inventory[selectedSlot].type == ItemType::BlankCard) {
+            DrawText("P: Open puncher", 220, 375, 18, GOLD);
+        }
+
+        if (puncherOpen) {
+            DrawRectangle(160, 35, 480, 380, DARKGRAY);
+            DrawText("Card Puncher", 185, 50, 24, WHITE);
+            DrawText("RUN 0001   BACK 0010", 185, 85, 18, LIGHTGRAY);
+            DrawText("REVERSE 0011   SLOT 0100", 185, 110, 18, LIGHTGRAY);
+
+            for (int row = 0; row < 2; row++) {
+                for (int i = 0; i < 4; i++) {
+                    Rectangle hole = GetPunchHoleRect(row, i);
+                    bool marked = row == 0 ? commandHoles[i] : argumentHoles[i];
+                    DrawRectangleRec(hole, BEIGE);
+                    if (marked) {
+                        DrawCircle(
+                            (int)hole.x + 20, (int)hole.y + 20, 12, BLACK
+                        );
+                    }
+                    if (row == 1) {
+                        DrawText(
+                            TextFormat("%i", 1 << i),
+                            (int)hole.x + 15, (int)hole.y + 45, 18, WHITE
+                        );
+                    }
+                }
+            }
+
+            const char* preview = command == 3
+                ? commandName
+                : TextFormat("%s %i", commandName, argument);
+            DrawText(preview, 185, 325, 24, validPattern ? GREEN : RED);
+            DrawText("E: Close", 185, 380, 18, LIGHTGRAY);
         }
 
         EndDrawing();
