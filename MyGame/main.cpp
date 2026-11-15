@@ -11,7 +11,8 @@ enum class ItemType {
     Wood,
     Furnace,
     BlankCard,
-    PunchedCard
+    PunchedCard,
+    IronPlate
 };
 
 // Максимальный размер стака
@@ -178,7 +179,13 @@ int main() {
     struct FurnaceStorage {
         InventorySlot ore = {};
         InventorySlot fuel = {};
+        InventorySlot output = {};
         InventorySlot reader = {};
+        int energy = 0;
+        int completedActions = 0;
+        bool smelting = false;
+        float smeltTimer = 0.0f;
+        const char* status = "Insert card";
     };
 
     FurnaceStorage furnaces[ROWS][COLS] = {};
@@ -481,7 +488,12 @@ int main() {
                 );
                 int oreLeft = addToInventory(
                     candidate, INVENTORY_SIZE,
-                    ItemType::IronOre, furnace.ore.amount
+                    ItemType::IronOre,
+                    furnace.ore.amount + (furnace.smelting ? 1 : 0)
+                );
+                int platesLeft = addToInventory(
+                    candidate, INVENTORY_SIZE,
+                    ItemType::IronPlate, furnace.output.amount
                 );
                 int coalLeft = addToInventory(
                     candidate, INVENTORY_SIZE,
@@ -499,7 +511,8 @@ int main() {
                     }
                 }
 
-                if (furnaceLeft == 0 && oreLeft == 0 && coalLeft == 0 && cardFits) {
+                if (furnaceLeft == 0 && oreLeft == 0 && coalLeft == 0 &&
+                    platesLeft == 0 && cardFits) {
                     // Всё помещается — применяем результат.
                     for (int i = 0; i < INVENTORY_SIZE; i++) {
                         inventory[i] = candidate[i];
@@ -801,6 +814,9 @@ int main() {
                 else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(1))) {
                     source = &furnace.fuel;
                 }
+                else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(2))) {
+                    source = &furnace.output;
+                }
 
                 if (source != nullptr && source->amount > 0) {
                     int moveCount = source->amount;
@@ -927,6 +943,7 @@ int main() {
                 if (source.type == ItemType::PunchedCard &&
                     furnace.reader.amount == 0) {
                     furnace.reader = source;
+                    furnace.completedActions = 0;
                     source = {};
                     selectedSlot = -1;
                 }
@@ -1141,6 +1158,70 @@ int main() {
             };
             puncherOpen = false;
             puncherSlot = -1;
+        }
+
+        // Плавка по установленной карте RUN.
+        for (int row = 0; row < ROWS; row++) {
+            for (int col = 0; col < COLS; col++) {
+                if (grid[row][col] != TileType::Furnace) {
+                    continue;
+                }
+                FurnaceStorage& furnace = furnaces[row][col];
+                if (furnace.reader.amount == 0) {
+                    furnace.status = "Insert card";
+                    continue;
+                }
+                if (furnace.reader.command != 1) {
+                    furnace.status = furnace.reader.command == 2
+                        ? "INVALID BACK" : "UNSUPPORTED COMMAND";
+                    continue;
+                }
+                if (furnace.completedActions >= furnace.reader.argument) {
+                    furnace.status = "Done";
+                    continue;
+                }
+                if (furnace.output.amount >= GetMaxStack(ItemType::IronPlate)) {
+                    furnace.status = "OUTPUT FULL";
+                    continue;
+                }
+                if (!furnace.smelting) {
+                    if (furnace.energy == 0) {
+                        if (furnace.fuel.amount == 0) {
+                            furnace.status = "FUEL EXHAUSTED";
+                            continue;
+                        }
+                        furnace.fuel.amount--;
+                        if (furnace.fuel.amount == 0) {
+                            furnace.fuel = {};
+                        }
+                        furnace.energy = 3;
+                    }
+                    if (furnace.ore.amount == 0) {
+                        furnace.status = "NO ORE";
+                        continue;
+                    }
+                    furnace.ore.amount--;
+                    if (furnace.ore.amount == 0) {
+                        furnace.ore = {};
+                    }
+                    furnace.energy--;
+                    furnace.smelting = true;
+                    furnace.smeltTimer = 3.0f;
+                }
+
+                furnace.status = "Smelting";
+                furnace.smeltTimer -= GetFrameTime();
+                if (furnace.smeltTimer <= 0.0f) {
+                    furnace.output.type = ItemType::IronPlate;
+                    furnace.output.amount++;
+                    furnace.smelting = false;
+                    furnace.smeltTimer = 0.0f;
+                    furnace.completedActions++;
+                    if (furnace.completedActions >= furnace.reader.argument) {
+                        furnace.status = "Done";
+                    }
+                }
+            }
         }
 
         BeginDrawing();
@@ -1407,12 +1488,20 @@ int main() {
                     else if (i == 1) {
                         item = furnace.fuel;
                     }
+                    else {
+                        item = furnace.output;
+                    }
 
                     if (item.amount > 0) {
                         Color color = item.type == ItemType::Coal ? BLACK : BROWN;
-                        DrawCircle(
-                            (int)slot.x + 30, (int)slot.y + 25, 15, color
-                        );
+                        if (item.type == ItemType::IronPlate) {
+                            DrawRectangle((int)slot.x + 12, (int)slot.y + 18, 36, 14, LIGHTGRAY);
+                        }
+                        else {
+                            DrawCircle(
+                                (int)slot.x + 30, (int)slot.y + 25, 15, color
+                            );
+                        }
                         DrawText(
                             TextFormat("%i", item.amount),
                             (int)slot.x + 30, (int)slot.y + 40, 16, WHITE
@@ -1428,6 +1517,24 @@ int main() {
 
                 const InventorySlot& card =
                     furnaces[openedFurnaceY][openedFurnaceX].reader;
+                const FurnaceStorage& furnace =
+                    furnaces[openedFurnaceY][openedFurnaceX];
+                DrawRectangle(10, 425, 590, 25, DARKGRAY);
+                DrawText(furnace.status, 20, 430, 16, WHITE);
+                if (card.amount > 0 && card.command == 1) {
+                    DrawText(
+                        TextFormat("%i/%i", furnace.completedActions, card.argument),
+                        105, 235, 18, WHITE
+                    );
+                }
+                if (furnace.smelting) {
+                    float progress = 1.0f - furnace.smeltTimer / 3.0f;
+                    if (progress < 0.0f) progress = 0.0f;
+                    if (progress > 1.0f) progress = 1.0f;
+                    DrawRectangle(100, 215, 75, 10, GRAY);
+                    DrawRectangle(100, 215, (int)(75 * progress), 10, GREEN);
+                    DrawRectangleLines(100, 215, 75, 10, WHITE);
+                }
                 if (card.amount == 0) {
                     DrawText("Insert card", 35, 375, 16, LIGHTGRAY);
                 }
@@ -1536,6 +1643,9 @@ int main() {
                     else if (inventory[i].type == ItemType::Wood) {
                         DrawCircle(slotX + 30, slotY + 25, 15, DARKBROWN);
                     }
+                    else if (inventory[i].type == ItemType::IronPlate) {
+                        DrawRectangle(slotX + 12, slotY + 18, 36, 14, LIGHTGRAY);
+                    }
                     else if (inventory[i].type == ItemType::Furnace) {
                         DrawRectangle(
                             slotX + 15,
@@ -1592,7 +1702,13 @@ int main() {
                 }
 
                 // Рисуем полупрозрачный предмет возле мыши.
-                if (item.type == ItemType::BlankCard) {
+                if (item.type == ItemType::IronPlate) {
+                    DrawRectangle(
+                        (int)mouse.x - 18, (int)mouse.y - 7,
+                        36, 14, Fade(LIGHTGRAY, 0.7f)
+                    );
+                }
+                else if (item.type == ItemType::BlankCard) {
                     DrawRectangle(
                         (int)mouse.x - 18, (int)mouse.y - 11,
                         36, 22, Fade(BEIGE, 0.7f)
@@ -1637,7 +1753,12 @@ int main() {
                 }
 
                 // Рисуем выбранный предмет под курсором.
-                if (item.type == ItemType::PunchedCard) {
+                if (item.type == ItemType::IronPlate) {
+                    DrawRectangle(
+                        (int)mouse.x - 18, (int)mouse.y - 7, 36, 14, LIGHTGRAY
+                    );
+                }
+                else if (item.type == ItemType::PunchedCard) {
                     DrawPunchedCard(
                         (int)mouse.x - 18, (int)mouse.y - 11,
                         item.command, item.argument
@@ -1686,6 +1807,9 @@ int main() {
                     }
                     else if (inventory[i].type == ItemType::Wood) {
                         itemName = "Wood";
+                    }
+                    else if (inventory[i].type == ItemType::IronPlate) {
+                        itemName = "Iron Plate";
                     }
                     else if (inventory[i].type == ItemType::Furnace) {
                         itemName = "Furnace";
