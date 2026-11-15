@@ -38,6 +38,10 @@ Rectangle GetInventorySlotRect(int index) {
     };
 }
 
+Rectangle GetFurnaceSlotRect(int index) {
+    return {25.0f, (float)(130 + index * 85), 60.0f, 60.0f};
+}
+
 int main() {
     InitWindow(800, 450, "My Game");
 
@@ -73,6 +77,44 @@ int main() {
         ItemType type;
         int amount;
     };
+
+    // Возвращает количество предметов, которые не поместились.
+    auto addToInventory = [](
+        InventorySlot* slots, int slotCount, ItemType type, int amount
+    ) {
+        int maxStack = GetMaxStack(type);
+
+        // Сначала дополняем существующие стопки.
+        for (int i = 0; i < slotCount && amount > 0; i++) {
+            if (slots[i].type != type || slots[i].amount == 0) {
+                continue;
+            }
+
+            int count = maxStack - slots[i].amount;
+            if (count > amount) {
+                count = amount;
+            }
+            slots[i].amount += count;
+            amount -= count;
+        }
+
+        // Затем занимаем пустые слоты.
+        for (int i = 0; i < slotCount && amount > 0; i++) {
+            if (slots[i].amount != 0) {
+                continue;
+            }
+
+            int count = amount;
+            if (count > maxStack) {
+                count = maxStack;
+            }
+            slots[i].type = type;
+            slots[i].amount = count;
+            amount -= count;
+        }
+
+        return amount;
+    };
     
     const int INVENTORY_SIZE = 20;
 
@@ -88,6 +130,13 @@ int main() {
     TileType grid[ROWS][COLS] = {};
     int durability[ROWS][COLS] = {};
     int resourceAmount[ROWS][COLS] = {};
+
+    struct FurnaceStorage {
+        InventorySlot ore = {};
+        InventorySlot fuel = {};
+    };
+
+    FurnaceStorage furnaces[ROWS][COLS] = {};
     
     grid[10][15] = TileType::IronOre;
     grid[10][16] = TileType::IronOre;
@@ -140,7 +189,17 @@ int main() {
     float inventoryFullTimer = 0.0f;
     Vector2 hitPosition = {0, 0};
 
+    int dismantleX = -1;
+    int dismantleY = -1;
+    float dismantleTimer = 0.0f;
+    const float DISMANTLE_TIME = 1.0f;
+
+    int openedFurnaceX = -1;
+    int openedFurnaceY = -1;
+
     while (!WindowShouldClose()) {
+
+        bool furnacePlacedThisFrame = false;
 
         int oldX = x;
 
@@ -283,6 +342,7 @@ int main() {
 
                         // Устанавливаем печь
                         grid[cellY][cellX] = TileType::Furnace;
+                        furnacePlacedThisFrame = true;
 
                         // Расходуем один предмет
                         inventory[i].amount--;
@@ -322,6 +382,90 @@ int main() {
         
         if (inventoryFullTimer > 0.0f) {
             inventoryFullTimer -= GetFrameTime();
+        }
+
+        // ==========================================
+        // Разбор печи
+        // ==========================================
+
+        bool canDismantle = false;
+
+        if (insideMap &&
+            !inventoryOpen &&
+            IsMouseButtonDown(MOUSE_BUTTON_RIGHT) &&
+            grid[cellY][cellX] == TileType::Furnace) {
+
+            Vector2 playerCenter = {
+                (float)x + 20,
+                (float)y + 20
+            };
+
+            Vector2 furnaceCenter = {
+                (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
+                (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
+            };
+
+            canDismantle = CheckCollisionPointCircle(
+                furnaceCenter, playerCenter, 60.0f
+            );
+        }
+
+        if (canDismantle) {
+            // При переходе на другую печь начинаем заново.
+            if (dismantleX != cellX || dismantleY != cellY) {
+                dismantleX = cellX;
+                dismantleY = cellY;
+                dismantleTimer = 0.0f;
+            }
+
+            dismantleTimer += GetFrameTime();
+
+            if (dismantleTimer >= DISMANTLE_TIME) {
+                dismantleTimer = DISMANTLE_TIME;
+
+                FurnaceStorage& furnace = furnaces[cellY][cellX];
+
+                // Проверяем вместимость на копии инвентаря.
+                InventorySlot candidate[INVENTORY_SIZE];
+                for (int i = 0; i < INVENTORY_SIZE; i++) {
+                    candidate[i] = inventory[i];
+                }
+
+                int furnaceLeft = addToInventory(
+                    candidate, INVENTORY_SIZE, ItemType::Furnace, 1
+                );
+                int oreLeft = addToInventory(
+                    candidate, INVENTORY_SIZE,
+                    ItemType::IronOre, furnace.ore.amount
+                );
+                int coalLeft = addToInventory(
+                    candidate, INVENTORY_SIZE,
+                    ItemType::Coal, furnace.fuel.amount
+                );
+
+                if (furnaceLeft == 0 && oreLeft == 0 && coalLeft == 0) {
+                    // Всё помещается — применяем результат.
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+                        inventory[i] = candidate[i];
+                    }
+
+                    furnace = {};
+                    grid[cellY][cellX] = TileType::Empty;
+
+                    dismantleX = -1;
+                    dismantleY = -1;
+                    dismantleTimer = 0.0f;
+                }
+                else {
+                    inventoryFullTimer = 1.0f;
+                }
+            }
+        }
+        else {
+            // Отпустили кнопку, отвели курсор или отошли.
+            dismantleX = -1;
+            dismantleY = -1;
+            dismantleTimer = 0.0f;
         }
 
         // ==========================================
@@ -478,6 +622,39 @@ int main() {
             }
         }
         
+        // Закрываем окно печи вместе с инвентарём.
+        if (!inventoryOpen) {
+            openedFurnaceX = -1;
+            openedFurnaceY = -1;
+        }
+
+        // Открываем печь отдельным кликом.
+        if (!inventoryOpen &&
+            !placingFurnace &&
+            !furnacePlacedThisFrame &&
+            insideMap &&
+            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+            grid[cellY][cellX] == TileType::Furnace) {
+
+            Vector2 playerCenter = {
+                (float)x + 20,
+                (float)y + 20
+            };
+
+            Vector2 furnaceCenter = {
+                (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
+                (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
+            };
+
+            if (CheckCollisionPointCircle(
+                furnaceCenter, playerCenter, 60.0f
+            )) {
+                openedFurnaceX = cellX;
+                openedFurnaceY = cellY;
+                inventoryOpen = true;
+            }
+        }
+
         // Перемещение предметов в инвентаре
         if (inventoryOpen) {
 
@@ -501,9 +678,80 @@ int main() {
                 }
             }
 
+            // Выгрузка предметов из печи по клику.
+            if (openedFurnaceX != -1 &&
+                openedFurnaceY != -1 &&
+                selectedSlot == -1 &&
+                (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) ||
+                 IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))) {
+                FurnaceStorage& furnace =
+                    furnaces[openedFurnaceY][openedFurnaceX];
+
+                InventorySlot* source = nullptr;
+                if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(0))) {
+                    source = &furnace.ore;
+                }
+                else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(1))) {
+                    source = &furnace.fuel;
+                }
+
+                if (source != nullptr && source->amount > 0) {
+                    int moveCount = source->amount;
+                    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+                        moveCount = 1;
+                    }
+
+                    int remaining = addToInventory(
+                        inventory, INVENTORY_SIZE, source->type, moveCount
+                    );
+                    source->amount -= moveCount - remaining;
+
+                    if (source->amount == 0) {
+                        source->type = ItemType::Empty;
+                    }
+                    if (remaining > 0) {
+                        inventoryFullTimer = 1.0f;
+                    }
+                }
+            }
+
             // Отпустили ЛКМ — перемещаем предмет
             if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) &&
                 selectedSlot != -1) {
+
+                if (openedFurnaceX != -1 && openedFurnaceY != -1) {
+                    FurnaceStorage& furnace =
+                        furnaces[openedFurnaceY][openedFurnaceX];
+
+                    InventorySlot& source = inventory[selectedSlot];
+                    InventorySlot* target = nullptr;
+
+                    if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(0)) &&
+                        source.type == ItemType::IronOre) {
+                        target = &furnace.ore;
+                    }
+                    else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(1)) &&
+                             source.type == ItemType::Coal) {
+                        target = &furnace.fuel;
+                    }
+
+                    if (target != nullptr) {
+                        int freeSpace = GetMaxStack(source.type) - target->amount;
+                        int moveCount = source.amount;
+                        if (moveCount > freeSpace) {
+                            moveCount = freeSpace;
+                        }
+
+                        if (moveCount > 0) {
+                            target->type = source.type;
+                            target->amount += moveCount;
+                            source.amount -= moveCount;
+                            if (source.amount == 0) {
+                                source.type = ItemType::Empty;
+                            }
+                        }
+                    }
+                }
 
                 for (int i = 0; i < INVENTORY_SIZE; i++) {
 
@@ -557,6 +805,43 @@ int main() {
                 selectedSlot = -1;
             }
             
+            // ПКМ при перетаскивании кладёт один предмет в печь.
+            if (inventoryOpen &&
+                openedFurnaceX != -1 &&
+                openedFurnaceY != -1 &&
+                selectedSlot != -1 &&
+                IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+
+                FurnaceStorage& furnace =
+                    furnaces[openedFurnaceY][openedFurnaceX];
+
+                InventorySlot& source = inventory[selectedSlot];
+                InventorySlot* target = nullptr;
+
+                if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(0)) &&
+                    source.type == ItemType::IronOre) {
+                    target = &furnace.ore;
+                }
+                else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(1)) &&
+                         source.type == ItemType::Coal) {
+                    target = &furnace.fuel;
+                }
+
+                if (target != nullptr &&
+                    source.amount > 0 &&
+                    target->amount < GetMaxStack(source.type)) {
+
+                    target->type = source.type;
+                    target->amount++;
+                    source.amount--;
+
+                    if (source.amount == 0) {
+                        source.type = ItemType::Empty;
+                        selectedSlot = -1;
+                    }
+                }
+            }
+
             if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) &&
                 selectedSlot == -1) {
                 
@@ -737,10 +1022,6 @@ int main() {
 
         ClearBackground(RAYWHITE);
         
-        if (inventoryFullTimer > 0.0f) {
-            DrawText("INVENTORY FULL", 10, 65, 20, RED);
-        }
-        
         for (int row = 0; row < ROWS; row++) {
             for (int col = 0; col < COLS; col++) {
 
@@ -837,6 +1118,25 @@ int main() {
 
         for (int y = 0; y < 450; y += TILE_SIZE) {
             DrawLine(0, y, 800, y, LIGHTGRAY);
+        }
+
+        if (dismantleX != -1 && dismantleTimer > 0.0f) {
+            int barX = dismantleX * TILE_SIZE;
+            int barY = dismantleY * TILE_SIZE - 8;
+
+            // У верхнего края рисуем полоску под печью.
+            if (barY < 0) {
+                barY = dismantleY * TILE_SIZE + TILE_SIZE + 2;
+            }
+
+            float progress = dismantleTimer / DISMANTLE_TIME;
+
+            DrawRectangle(barX, barY, TILE_SIZE, 5, DARKGRAY);
+            DrawRectangle(
+                barX, barY,
+                (int)(TILE_SIZE * progress), 5,
+                ORANGE
+            );
         }
         
         DrawText(TextFormat("Score: %i", score), 10, 10, 20, BLACK);
@@ -954,6 +1254,47 @@ int main() {
             DrawRectangle(200, 60, 400, 330, DARKGRAY);
 
             DrawText("Inventory", 220, 75, 30, WHITE);
+
+            if (openedFurnaceX != -1 && openedFurnaceY != -1) {
+                DrawRectangle(10, 60, 180, 330, DARKGRAY);
+                DrawText("Furnace", 25, 75, 24, WHITE);
+
+                const char* labels[] = {
+                    "1. Iron Ore",
+                    "2. Coal",
+                    "3. Plates"
+                };
+
+                for (int i = 0; i < 3; i++) {
+                    int slotY = 130 + i * 85;
+
+                    DrawText(labels[i], 25, slotY - 20, 16, WHITE);
+                    Rectangle slot = GetFurnaceSlotRect(i);
+                    DrawRectangleRec(slot, GRAY);
+                    DrawRectangleLinesEx(slot, 1, WHITE);
+
+                    FurnaceStorage& furnace =
+                        furnaces[openedFurnaceY][openedFurnaceX];
+                    InventorySlot item = {};
+                    if (i == 0) {
+                        item = furnace.ore;
+                    }
+                    else if (i == 1) {
+                        item = furnace.fuel;
+                    }
+
+                    if (item.amount > 0) {
+                        Color color = item.type == ItemType::Coal ? BLACK : BROWN;
+                        DrawCircle(
+                            (int)slot.x + 30, (int)slot.y + 25, 15, color
+                        );
+                        DrawText(
+                            TextFormat("%i", item.amount),
+                            (int)slot.x + 30, (int)slot.y + 40, 16, WHITE
+                        );
+                    }
+                }
+            }
             
             // Панель крафта справа от инвентаря
             DrawRectangle(610, 60, 185, 255, DARKGRAY);
@@ -1260,6 +1601,10 @@ int main() {
             
         }
         
+        if (inventoryFullTimer > 0.0f) {
+            DrawText("INVENTORY FULL", 10, 65, 20, RED);
+        }
+
         EndDrawing();
     }
 
