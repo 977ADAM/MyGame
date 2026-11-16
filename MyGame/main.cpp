@@ -14,7 +14,8 @@ enum class ItemType {
     BlankCard,
     PunchedCard,
     IronPlate,
-    Drill
+    Drill,
+    Roller
 };
 
 // Максимальный размер стака
@@ -80,6 +81,20 @@ void DrawPunchedCard(int x, int y, int command, int argument) {
     }
 }
 
+void DrawRollerItem(int x, int y) {
+    DrawRectangle(x, y, 36, 22, DARKBROWN);
+    for (int i = 0; i < 3; i++) {
+        DrawRectangle(x + 3 + i * 11, y + 3, 8, 16, LIGHTGRAY);
+    }
+}
+
+void DrawRollerTile(int x, int y, Color color) {
+    DrawRectangle(x, y + 2, 20, 16, Fade(color, 0.35f));
+    for (int i = 0; i < 3; i++) {
+        DrawRectangle(x + 3 + i * 6, y + 4, 3, 12, color);
+    }
+}
+
 int main() {
     InitWindow(800, 450, "My Game");
 
@@ -108,7 +123,8 @@ int main() {
         Drill,
         Boulder,
         Tree,
-        Furnace
+        Furnace,
+        Roller
     };
     
     struct CardInstruction {
@@ -267,6 +283,7 @@ int main() {
     TileType selectedTile = TileType::Wall;
     bool placingFurnace = false;
     bool placingDrill = false;
+    bool placingRoller = false;
     
     float miningCooldown = 0.0f;
     float hitAnimationTimer = 0.0f;
@@ -335,6 +352,7 @@ int main() {
             selectedTile = TileType::Wall;
             placingFurnace = false;
             placingDrill = false;
+            placingRoller = false;
         }
 
         // Клавиша 2 — шестерёнка
@@ -342,6 +360,7 @@ int main() {
             selectedTile = TileType::Gear;
             placingFurnace = false;
             placingDrill = false;
+            placingRoller = false;
         }
 
         // Клавиша 3 — генератор
@@ -349,6 +368,7 @@ int main() {
             selectedTile = TileType::Generator;
             placingFurnace = false;
             placingDrill = false;
+            placingRoller = false;
         }
 
         
@@ -356,6 +376,7 @@ int main() {
             selectedTile = TileType::Empty;
             placingFurnace = false;
             placingDrill = false;
+            placingRoller = false;
         }
         
         // ==========================================
@@ -416,7 +437,7 @@ int main() {
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
                 canBuild &&
                 !inventoryOpen &&
-                !placingFurnace && !placingDrill &&
+                !placingFurnace && !placingDrill && !placingRoller &&
                 selectedTile != TileType::Empty) {
 
                 grid[cellY][cellX] = selectedTile;
@@ -448,6 +469,7 @@ int main() {
                         // Выходим из режима размещения
                         placingFurnace = false;
                         placingDrill = false;
+                        placingRoller = false;
 
                         break;
                     }
@@ -472,6 +494,26 @@ int main() {
                         inventory[i] = {};
                     }
                     placingDrill = false;
+                    placingRoller = false;
+                    break;
+                }
+            }
+
+            if (placingRoller &&
+                !inventoryOpen &&
+                canBuild &&
+                IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                for (int i = 0; i < INVENTORY_SIZE; i++) {
+                    if (inventory[i].type != ItemType::Roller ||
+                        inventory[i].amount == 0) {
+                        continue;
+                    }
+                    grid[cellY][cellX] = TileType::Roller;
+                    inventory[i].amount--;
+                    if (inventory[i].amount == 0) {
+                        inventory[i] = {};
+                    }
+                    placingRoller = false;
                     break;
                 }
             }
@@ -509,7 +551,8 @@ int main() {
             !inventoryOpen &&
             IsMouseButtonDown(MOUSE_BUTTON_RIGHT) &&
             (grid[cellY][cellX] == TileType::Furnace ||
-             grid[cellY][cellX] == TileType::Drill)) {
+             grid[cellY][cellX] == TileType::Drill ||
+             grid[cellY][cellX] == TileType::Roller)) {
 
             Vector2 playerCenter = {
                 (float)x + 20,
@@ -539,7 +582,21 @@ int main() {
             if (dismantleTimer >= DISMANTLE_TIME) {
                 dismantleTimer = DISMANTLE_TIME;
 
-                if (grid[cellY][cellX] == TileType::Drill) {
+                if (grid[cellY][cellX] == TileType::Roller) {
+                    int remaining = addToInventory(
+                        inventory, INVENTORY_SIZE, ItemType::Roller, 1
+                    );
+                    if (remaining == 0) {
+                        grid[cellY][cellX] = TileType::Empty;
+                        dismantleX = -1;
+                        dismantleY = -1;
+                        dismantleTimer = 0.0f;
+                    }
+                    else {
+                        inventoryFullTimer = 1.0f;
+                    }
+                }
+                else if (grid[cellY][cellX] == TileType::Drill) {
                     DrillStorage& drill = drills[cellY][cellX];
 
                     InventorySlot candidate[INVENTORY_SIZE];
@@ -657,7 +714,7 @@ int main() {
         // ==========================================
 
         if (selectedTile == TileType::Empty &&
-            !placingFurnace && !placingDrill &&
+            !placingFurnace && !placingDrill && !placingRoller &&
             insideMap &&
             IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inventoryOpen && miningCooldown <= 0.0f) {
 
@@ -867,7 +924,7 @@ int main() {
 
         // Открываем печь отдельным кликом.
         if (!inventoryOpen &&
-            !placingFurnace && !placingDrill &&
+            !placingFurnace && !placingDrill && !placingRoller &&
             !furnacePlacedThisFrame &&
             insideMap &&
             IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
@@ -894,7 +951,7 @@ int main() {
 
         // Открываем бур отдельным кликом в пределах досягаемости.
         if (!inventoryOpen &&
-            !placingFurnace && !placingDrill &&
+            !placingFurnace && !placingDrill && !placingRoller &&
             !drillPlacedThisFrame &&
             insideMap &&
             IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
@@ -1080,6 +1137,7 @@ int main() {
                         selectedSlot = i;
                         placingFurnace = inventory[i].type == ItemType::Furnace;
                         placingDrill = inventory[i].type == ItemType::Drill;
+                        placingRoller = inventory[i].type == ItemType::Roller;
                         break;
                     }
                 }
@@ -1185,6 +1243,7 @@ int main() {
                         // Клик по исходному слоту отменяет выбор.
                         placingFurnace = false;
                         placingDrill = false;
+                        placingRoller = false;
                         selectedSlot = -1;
                         break;
                     }
@@ -1356,54 +1415,56 @@ int main() {
             }
         }
 
-        Rectangle craftButton = {615, 145, 170, 30};
-        Rectangle cardButton = {615, 225, 170, 30};
-        Rectangle drillButton = {615, 305, 170, 30};
+        Rectangle craftButton = {615, 132, 170, 24};
+        Rectangle cardButton = {615, 192, 170, 24};
+        Rectangle drillButton = {615, 252, 170, 24};
+        Rectangle rollerButton = {615, 312, 170, 24};
 
-        ItemType material = ItemType::Empty;
+        struct Ingredient {
+            ItemType type;
+            int amount;
+        };
+        std::vector<Ingredient> ingredients;
         CraftOrder order = {};
-        int required = 0;
 
         if (inventoryOpen && !puncherOpen &&
             IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             if (CheckCollisionPointRec(mouse, craftButton) && stoneCount >= 3) {
-                material = ItemType::Stone;
-                required = 3;
+                ingredients = {{ItemType::Stone, 3}};
                 order = {ItemType::Furnace, 2.0f};
             }
             else if (CheckCollisionPointRec(mouse, cardButton) && woodCount >= 1) {
-                material = ItemType::Wood;
-                required = 1;
+                ingredients = {{ItemType::Wood, 1}};
                 order = {ItemType::BlankCard, 1.0f};
             }
             else if (CheckCollisionPointRec(mouse, drillButton) && plateCount >= 3) {
-                material = ItemType::IronPlate;
-                required = 3;
+                ingredients = {{ItemType::IronPlate, 3}};
                 order = {ItemType::Drill, 3.0f};
+            }
+            else if (CheckCollisionPointRec(mouse, rollerButton) &&
+                     plateCount >= 1 && woodCount >= 1) {
+                ingredients = {{ItemType::IronPlate, 1}, {ItemType::Wood, 1}};
+                order = {ItemType::Roller, 2.0f};
             }
         }
 
-        if (required > 0) {
-            // Материалы расходуются при заказе.
-            for (int i = 0; i < INVENTORY_SIZE && required > 0; i++) {
-                if (inventory[i].type != material) {
-                    continue;
-                }
-
-                int take = inventory[i].amount;
-                if (take > required) {
-                    take = required;
-                }
-                inventory[i].amount -= take;
-                required -= take;
-
-                if (inventory[i].amount == 0) {
-                    inventory[i].type = ItemType::Empty;
-                    if (selectedSlot == i) {
-                        selectedSlot = -1;
+        if (!ingredients.empty()) {
+            for (const Ingredient& ingredient : ingredients) {
+                int required = ingredient.amount;
+                for (int i = 0; i < INVENTORY_SIZE && required > 0; i++) {
+                    if (inventory[i].type != ingredient.type) {
+                        continue;
                     }
-                    if (splitSource == i) {
-                        splitSource = -1;
+                    int take = inventory[i].amount;
+                    if (take > required) {
+                        take = required;
+                    }
+                    inventory[i].amount -= take;
+                    required -= take;
+                    if (inventory[i].amount == 0) {
+                        inventory[i] = {};
+                        if (selectedSlot == i) selectedSlot = -1;
+                        if (splitSource == i) splitSource = -1;
                     }
                 }
             }
@@ -1696,6 +1757,10 @@ int main() {
             for (int col = 0; col < COLS; col++) {
 
                 TileType tile = grid[row][col];
+                if (tile == TileType::Roller) {
+                    DrawRollerTile(col * TILE_SIZE, row * TILE_SIZE, DARKGRAY);
+                    continue;
+                }
 
                 Color color;
 
@@ -1846,43 +1911,51 @@ int main() {
         // ==========================================
 
         if (insideMap && !inventoryOpen &&
-            (placingFurnace || placingDrill || selectedTile != TileType::Empty)) {
+            (placingFurnace || placingDrill || placingRoller || selectedTile != TileType::Empty)) {
 
-            Color previewColor = GRAY;
+            if (placingRoller) {
+                DrawRollerTile(
+                    cellX * TILE_SIZE, cellY * TILE_SIZE,
+                    canBuild ? GREEN : RED
+                );
+            }
+            else {
+                Color previewColor = GRAY;
 
-            if (placingFurnace) {
-                previewColor = MAROON;
-            }
-            else if (placingDrill) {
-                previewColor = PURPLE;
-            }
-            else if (selectedTile == TileType::Gear) {
-                previewColor = ORANGE;
-            }
-            else if (selectedTile == TileType::Generator) {
-                previewColor = GREEN;
-            }
+                if (placingFurnace) {
+                    previewColor = MAROON;
+                }
+                else if (placingDrill) {
+                    previewColor = PURPLE;
+                }
+                else if (selectedTile == TileType::Gear) {
+                    previewColor = ORANGE;
+                }
+                else if (selectedTile == TileType::Generator) {
+                    previewColor = GREEN;
+                }
 
-            // Запрет строительства обозначаем красным ДО рисования.
-            if (!canBuild) {
-                previewColor = RED;
+                // Запрет строительства обозначаем красным ДО рисования.
+                if (!canBuild) {
+                    previewColor = RED;
+                }
+
+                DrawRectangle(
+                    cellX * TILE_SIZE,
+                    cellY * TILE_SIZE,
+                    TILE_SIZE,
+                    TILE_SIZE,
+                    Fade(previewColor, 0.4f)
+                );
+
+                DrawRectangleLines(
+                    cellX * TILE_SIZE,
+                    cellY * TILE_SIZE,
+                    TILE_SIZE,
+                    TILE_SIZE,
+                    previewColor
+                );
             }
-
-            DrawRectangle(
-                cellX * TILE_SIZE,
-                cellY * TILE_SIZE,
-                TILE_SIZE,
-                TILE_SIZE,
-                Fade(previewColor, 0.4f)
-            );
-
-            DrawRectangleLines(
-                cellX * TILE_SIZE,
-                cellY * TILE_SIZE,
-                TILE_SIZE,
-                TILE_SIZE,
-                previewColor
-            );
         }
 
         // ==========================================
@@ -1913,6 +1986,9 @@ int main() {
         }
         else if (placingDrill) {
             selectedName = "Drill";
+        }
+        else if (placingRoller) {
+            selectedName = "Roller";
         }
 
         // Рисуем интерфейс поверх игрового мира
@@ -2148,29 +2224,38 @@ int main() {
             // Панель крафта справа от инвентаря.
             DrawRectangle(610, 60, 185, 375, DARKGRAY);
             DrawText("Crafting", 620, 75, 22, WHITE);
-            DrawText("Furnace", 620, 105, 20, WHITE);
+            DrawText("Furnace", 620, 96, 18, WHITE);
             DrawRectangleRec(craftButton, stoneCount >= 3 ? GREEN : GRAY);
-            DrawText("Craft Furnace", 625, 152, 17, WHITE);
+            DrawText("Craft Furnace", 625, 136, 16, WHITE);
             DrawText(
                 TextFormat("Stone: %i/3", stoneCount),
-                620, 127, 16, stoneCount >= 3 ? GREEN : RED
+                620, 115, 14, stoneCount >= 3 ? GREEN : RED
             );
 
-            DrawText("Blank Card", 620, 185, 20, WHITE);
+            DrawText("Blank Card", 620, 156, 18, WHITE);
             DrawRectangleRec(cardButton, woodCount >= 1 ? GREEN : GRAY);
-            DrawText("Craft Card", 625, 232, 17, WHITE);
+            DrawText("Craft Card", 625, 196, 16, WHITE);
             DrawText(
                 TextFormat("Wood: %i/1", woodCount),
-                620, 207, 16, woodCount >= 1 ? GREEN : RED
+                620, 175, 14, woodCount >= 1 ? GREEN : RED
             );
 
-            DrawText("Drill", 620, 265, 20, WHITE);
+            DrawText("Drill", 620, 216, 18, WHITE);
             DrawText(
                 TextFormat("Plates: %i/3", plateCount),
-                620, 287, 16, plateCount >= 3 ? GREEN : RED
+                620, 235, 14, plateCount >= 3 ? GREEN : RED
             );
             DrawRectangleRec(drillButton, plateCount >= 3 ? GREEN : GRAY);
-            DrawText("Craft Drill", 625, 312, 17, WHITE);
+            DrawText("Craft Drill", 625, 256, 16, WHITE);
+
+            bool canCraftRoller = plateCount >= 1 && woodCount >= 1;
+            DrawText("Roller", 620, 276, 18, WHITE);
+            DrawText(
+                TextFormat("Plate %i/1 Wood %i/1", plateCount, woodCount),
+                620, 295, 14, canCraftRoller ? GREEN : RED
+            );
+            DrawRectangleRec(rollerButton, canCraftRoller ? GREEN : GRAY);
+            DrawText("Craft Roller", 625, 316, 16, WHITE);
 
             if (!craftQueue.empty()) {
                 const char* craftingName = "Furnace";
@@ -2179,6 +2264,9 @@ int main() {
                 }
                 else if (craftQueue.front().result == ItemType::Drill) {
                     craftingName = "Drill";
+                }
+                else if (craftQueue.front().result == ItemType::Roller) {
+                    craftingName = "Roller";
                 }
                 DrawText(craftingName, 620, 345, 18, WHITE);
 
@@ -2255,6 +2343,9 @@ int main() {
                     else if (inventory[i].type == ItemType::Drill) {
                         DrawRectangle(slotX + 15, slotY + 10, 30, 30, PURPLE);
                     }
+                    else if (inventory[i].type == ItemType::Roller) {
+                        DrawRollerItem(slotX + 12, slotY + 15);
+                    }
                     else if (inventory[i].type == ItemType::Furnace) {
                         DrawRectangle(
                             slotX + 15,
@@ -2320,6 +2411,9 @@ int main() {
                         36, 14, Fade(LIGHTGRAY, 0.7f)
                     );
                 }
+                else if (item.type == ItemType::Roller) {
+                    DrawRollerItem((int)mouse.x - 18, (int)mouse.y - 11);
+                }
                 else if (item.type == ItemType::BlankCard) {
                     DrawRectangle(
                         (int)mouse.x - 18, (int)mouse.y - 11,
@@ -2378,6 +2472,9 @@ int main() {
                         (int)mouse.x - 18, (int)mouse.y - 11,
                         item.cards.front().command, item.cards.front().argument
                     );
+                }
+                else if (item.type == ItemType::Roller) {
+                    DrawRollerItem((int)mouse.x - 18, (int)mouse.y - 11);
                 }
                 else if (item.type == ItemType::BlankCard) {
                     DrawRectangle(
@@ -2504,6 +2601,9 @@ int main() {
                     }
                     else if (inventory[i].type == ItemType::Drill) {
                         itemName = "Drill";
+                    }
+                    else if (inventory[i].type == ItemType::Roller) {
+                        itemName = "Roller";
                     }
 
                     else if (inventory[i].type == ItemType::BlankCard) {
