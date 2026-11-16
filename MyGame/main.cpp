@@ -1,6 +1,7 @@
 
 #include <raylib.h>
 #include <queue>
+#include <vector>
 
 // Типы предметов
 enum class ItemType {
@@ -110,11 +111,15 @@ int main() {
         Furnace
     };
     
-    struct InventorySlot {
-        ItemType type;
-        int amount;
+    struct CardInstruction {
         int command = 0;
         int argument = 0;
+    };
+
+    struct InventorySlot {
+        ItemType type = ItemType::Empty;
+        int amount = 0;
+        std::vector<CardInstruction> cards;
     };
 
     // Возвращает количество предметов, которые не поместились.
@@ -185,15 +190,28 @@ int main() {
         InventorySlot reader = {};
         int energy = 0;
         int completedActions = 0;
+        int cardIndex = 0;
+        float commandTimer = 0.0f;
         bool smelting = false;
         float smeltTimer = 0.0f;
         const char* status = "Insert card";
     };
 
     FurnaceStorage furnaces[ROWS][COLS] = {};
-    
-    // Временно для проверки установки бура.
-    inventory[0] = {ItemType::Drill, 1};
+
+    struct DrillStorage {
+        InventorySlot fuel = {};
+        InventorySlot reader = {};
+        InventorySlot output = {};
+        int energy = 0;
+        int completedActions = 0;
+        int cardIndex = 0;
+        float commandTimer = 0.0f;
+        float hitTimer = 0.0f;
+        const char* status = "Insert card";
+    };
+
+    DrillStorage drills[ROWS][COLS] = {};
     
     grid[10][15] = TileType::IronOre;
     grid[10][16] = TileType::IronOre;
@@ -210,6 +228,12 @@ int main() {
     grid[7][8] = TileType::Tree;
     grid[7][9] = TileType::Tree;
     grid[8][8] = TileType::Tree;
+    grid[6][7] = TileType::Tree;
+    grid[6][8] = TileType::Tree;
+    grid[7][6] = TileType::Tree;
+    grid[12][10] = TileType::Tree;
+    grid[13][10] = TileType::Tree;
+    grid[13][11] = TileType::Tree;
     
     for (int row = 0; row < ROWS; row++) {
         for (int col = 0; col < COLS; col++) {
@@ -254,10 +278,13 @@ int main() {
 
     int openedFurnaceX = -1;
     int openedFurnaceY = -1;
+    int openedDrillX = -1;
+    int openedDrillY = -1;
 
     while (!WindowShouldClose()) {
 
         bool furnacePlacedThisFrame = false;
+        bool drillPlacedThisFrame = false;
 
         int oldX = x;
 
@@ -437,6 +464,7 @@ int main() {
                     }
                     drillDeposits[cellY][cellX] = grid[cellY][cellX];
                     grid[cellY][cellX] = TileType::Drill;
+                    drillPlacedThisFrame = true;
                     inventory[i].amount--;
                     if (inventory[i].amount == 0) {
                         inventory[i] = {};
@@ -510,10 +538,43 @@ int main() {
                 dismantleTimer = DISMANTLE_TIME;
 
                 if (grid[cellY][cellX] == TileType::Drill) {
-                    int remaining = addToInventory(
-                        inventory, INVENTORY_SIZE, ItemType::Drill, 1
+                    DrillStorage& drill = drills[cellY][cellX];
+
+                    InventorySlot candidate[INVENTORY_SIZE];
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+                        candidate[i] = inventory[i];
+                    }
+
+                    int drillLeft = addToInventory(
+                        candidate, INVENTORY_SIZE, ItemType::Drill, 1
                     );
-                    if (remaining == 0) {
+                    int coalLeft = addToInventory(
+                        candidate, INVENTORY_SIZE, ItemType::Coal, drill.fuel.amount
+                    );
+
+                    int outputLeft = addToInventory(
+                        candidate, INVENTORY_SIZE,
+                        drill.output.type, drill.output.amount
+                    );
+
+                    bool cardFits = drill.reader.amount == 0;
+                    if (!cardFits) {
+                        for (int i = 0; i < INVENTORY_SIZE; i++) {
+                            if (candidate[i].amount == 0) {
+                                candidate[i] = drill.reader;
+                                cardFits = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (drillLeft == 0 && coalLeft == 0 &&
+                        outputLeft == 0 && cardFits) {
+                        for (int i = 0; i < INVENTORY_SIZE; i++) {
+                            inventory[i] = candidate[i];
+                        }
+
+                        drill = {};
                         grid[cellY][cellX] = resourceAmount[cellY][cellX] > 0
                             ? drillDeposits[cellY][cellX] : TileType::Empty;
                         drillDeposits[cellY][cellX] = TileType::Empty;
@@ -794,10 +855,12 @@ int main() {
             ((command == 1 || command == 2 || command == 4) && argument > 0) ||
             (command == 3 && argument == 0);
         
-        // Закрываем окно печи вместе с инвентарём.
+        // Закрываем окно постройки вместе с инвентарём.
         if (!inventoryOpen) {
             openedFurnaceX = -1;
             openedFurnaceY = -1;
+            openedDrillX = -1;
+            openedDrillY = -1;
         }
 
         // Открываем печь отдельным кликом.
@@ -827,11 +890,179 @@ int main() {
             }
         }
 
+        // Открываем бур отдельным кликом в пределах досягаемости.
+        if (!inventoryOpen &&
+            !placingFurnace && !placingDrill &&
+            !drillPlacedThisFrame &&
+            insideMap &&
+            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+            grid[cellY][cellX] == TileType::Drill) {
+
+            Vector2 playerCenter = {
+                (float)x + 20,
+                (float)y + 20
+            };
+
+            Vector2 drillCenter = {
+                (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
+                (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
+            };
+
+            if (CheckCollisionPointCircle(
+                drillCenter, playerCenter, 60.0f
+            )) {
+                openedDrillX = cellX;
+                openedDrillY = cellY;
+                inventoryOpen = true;
+            }
+        }
+
         // Перемещение предметов в инвентаре
         if (inventoryOpen && !puncherOpen) {
             bool leftPressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
             bool rightPressed = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
+            if (selectedSlot != -1 &&
+                inventory[selectedSlot].type == ItemType::PunchedCard &&
+                inventory[selectedSlot].cards.size() > 1 &&
+                IsKeyPressed(KEY_X)) {
+
+                int freeSlot = -1;
+                for (int i = 0; i < INVENTORY_SIZE; i++) {
+                    if (inventory[i].amount == 0) {
+                        freeSlot = i;
+                        break;
+                    }
+                }
+
+                if (freeSlot != -1) {
+                    InventorySlot& chain = inventory[selectedSlot];
+                    inventory[freeSlot] = {
+                        ItemType::PunchedCard, 1, {chain.cards.back()}
+                    };
+                    chain.cards.pop_back();
+                }
+                else {
+                    inventoryFullTimer = 1.0f;
+                }
+            }
+
             int selectedBeforeClick = selectedSlot;
+
+            if (openedDrillX != -1 && openedDrillY != -1 &&
+                (leftPressed || rightPressed)) {
+
+                InventorySlot& fuel =
+                    drills[openedDrillY][openedDrillX].fuel;
+                Rectangle fuelRect = {25, 130, 60, 60};
+
+                if (CheckCollisionPointRec(mouse, fuelRect)) {
+                    if (selectedBeforeClick != -1) {
+                        InventorySlot& source = inventory[selectedBeforeClick];
+
+                        if (source.type == ItemType::Coal) {
+                            int count = rightPressed ? 1 : source.amount;
+                            int space = GetMaxStack(ItemType::Coal) - fuel.amount;
+
+                            if (count > space) {
+                                count = space;
+                            }
+
+                            if (count > 0) {
+                                fuel.type = ItemType::Coal;
+                                fuel.amount += count;
+                                source.amount -= count;
+
+                                if (source.amount == 0) {
+                                    source = {};
+                                    selectedSlot = -1;
+                                }
+                            }
+                        }
+                    }
+                    else if (fuel.amount > 0) {
+                        int count = rightPressed ? 1 : fuel.amount;
+                        int remaining = addToInventory(
+                            inventory, INVENTORY_SIZE, ItemType::Coal, count
+                        );
+
+                        fuel.amount -= count - remaining;
+
+                        if (fuel.amount == 0) {
+                            fuel = {};
+                        }
+                        if (remaining > 0) {
+                            inventoryFullTimer = 1.0f;
+                        }
+                    }
+                }
+            }
+
+            if (openedDrillX != -1 && openedDrillY != -1 &&
+                selectedBeforeClick == -1 &&
+                (leftPressed || rightPressed)) {
+
+                Rectangle outputRect = {25, 215, 60, 60};
+                InventorySlot& output =
+                    drills[openedDrillY][openedDrillX].output;
+
+                if (CheckCollisionPointRec(mouse, outputRect) &&
+                    output.amount > 0) {
+                    int count = rightPressed ? 1 : output.amount;
+                    int remaining = addToInventory(
+                        inventory, INVENTORY_SIZE, output.type, count
+                    );
+
+                    output.amount -= count - remaining;
+                    if (output.amount == 0) {
+                        output = {};
+                    }
+                    if (remaining > 0) {
+                        inventoryFullTimer = 1.0f;
+                    }
+                }
+            }
+
+            if (openedDrillX != -1 && openedDrillY != -1 &&
+                leftPressed) {
+
+                InventorySlot& card =
+                    drills[openedDrillY][openedDrillX].reader;
+                Rectangle readerRect = {25, 365, 150, 35};
+
+                if (CheckCollisionPointRec(mouse, readerRect)) {
+                    if (selectedBeforeClick != -1) {
+                        InventorySlot& source = inventory[selectedBeforeClick];
+
+                        if (source.type == ItemType::PunchedCard &&
+                            card.amount == 0) {
+                            card = source;
+                            DrillStorage& drill = drills[openedDrillY][openedDrillX];
+                            drill.completedActions = 0;
+                            drill.cardIndex = 0;
+                            drill.commandTimer = 0.0f;
+                            source = {};
+                            selectedSlot = -1;
+                        }
+                    }
+                    else if (card.amount > 0) {
+                        int freeSlot = -1;
+                        for (int i = 0; i < INVENTORY_SIZE; i++) {
+                            if (inventory[i].amount == 0) {
+                                freeSlot = i;
+                                break;
+                            }
+                        }
+
+                        if (freeSlot != -1) {
+                            inventory[freeSlot] = card;
+                            card = {};
+                        }
+                        else {
+                            inventoryFullTimer = 1.0f;
+                        }
+                    }
+                }
+            }
 
             // Первый клик выбирает стопку до следующего клика.
             if (leftPressed && selectedBeforeClick == -1) {
@@ -901,9 +1132,26 @@ int main() {
 
                         if (selectedSlot != i) {
 
-                            // Одинаковые предметы объединяем
-                            if (inventory[selectedSlot].type == inventory[i].type &&
-                                inventory[i].type != ItemType::Empty) {
+                            bool joiningCards =
+                                (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
+                                inventory[selectedSlot].type == ItemType::PunchedCard &&
+                                inventory[i].type == ItemType::PunchedCard;
+
+                            if (joiningCards) {
+                                InventorySlot& source = inventory[selectedSlot];
+                                InventorySlot& target = inventory[i];
+
+                                // Сначала выбранная цепочка, затем та, по которой нажали.
+                                target.cards.insert(
+                                    target.cards.begin(),
+                                    source.cards.begin(),
+                                    source.cards.end()
+                                );
+                                source = {};
+                            }
+                            // Одинаковые предметы объединяем.
+                            else if (inventory[selectedSlot].type == inventory[i].type &&
+                                     inventory[i].type != ItemType::Empty) {
 
                                 int freeSpace =
                                     GetMaxStack(inventory[i].type) -
@@ -998,6 +1246,8 @@ int main() {
                     furnace.reader.amount == 0) {
                     furnace.reader = source;
                     furnace.completedActions = 0;
+                    furnace.cardIndex = 0;
+                    furnace.commandTimer = 0.0f;
                     source = {};
                     selectedSlot = -1;
                 }
@@ -1218,7 +1468,7 @@ int main() {
                 inventory[puncherSlot] = {};
             }
             inventory[punchedCardSlot] = {
-                ItemType::PunchedCard, 1, command, argument
+                ItemType::PunchedCard, 1, {{command, argument}}
             };
             puncherOpen = false;
             puncherSlot = -1;
@@ -1235,31 +1485,55 @@ int main() {
                     furnace.status = "Insert card";
                     continue;
                 }
-                if (furnace.reader.command != 1) {
-                    furnace.status = furnace.reader.command == 2
-                        ? "INVALID BACK" : "UNSUPPORTED COMMAND";
-                    continue;
-                }
-                if (furnace.completedActions >= furnace.reader.argument) {
+                if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
                     furnace.status = "Done";
                     continue;
                 }
-                if (furnace.output.amount >= GetMaxStack(ItemType::IronPlate)) {
+
+                const CardInstruction& instruction =
+                    furnace.reader.cards[furnace.cardIndex];
+
+                if (instruction.command == 1 &&
+                    furnace.output.amount >= GetMaxStack(ItemType::IronPlate)) {
                     furnace.status = "OUTPUT FULL";
                     continue;
                 }
-                if (!furnace.smelting) {
-                    if (furnace.energy == 0) {
-                        if (furnace.fuel.amount == 0) {
-                            furnace.status = "FUEL EXHAUSTED";
-                            continue;
-                        }
-                        furnace.fuel.amount--;
-                        if (furnace.fuel.amount == 0) {
-                            furnace.fuel = {};
-                        }
-                        furnace.energy = 3;
+
+                bool continuingSmelt = instruction.command == 1 && furnace.smelting;
+                if (!continuingSmelt && furnace.energy == 0) {
+                    if (furnace.fuel.amount == 0) {
+                        furnace.status = "FUEL EXHAUSTED";
+                        continue;
                     }
+                    furnace.fuel.amount--;
+                    if (furnace.fuel.amount == 0) {
+                        furnace.fuel = {};
+                    }
+                    furnace.energy = 3;
+                }
+
+                if (instruction.command == 2) {
+                    furnace.status = "Reading BACK";
+                    furnace.commandTimer += GetFrameTime();
+                    if (furnace.commandTimer < 0.2f) {
+                        continue;
+                    }
+                    if (instruction.argument > furnace.cardIndex) {
+                        furnace.status = "INVALID BACK";
+                        continue;
+                    }
+                    furnace.cardIndex -= instruction.argument;
+                    furnace.completedActions = 0;
+                    furnace.commandTimer = 0.0f;
+                    continue;
+                }
+
+                if (instruction.command != 1) {
+                    furnace.status = "UNSUPPORTED COMMAND";
+                    continue;
+                }
+
+                if (!furnace.smelting) {
                     if (furnace.ore.amount == 0) {
                         furnace.status = "NO ORE";
                         continue;
@@ -1281,9 +1555,133 @@ int main() {
                     furnace.smelting = false;
                     furnace.smeltTimer = 0.0f;
                     furnace.completedActions++;
-                    if (furnace.completedActions >= furnace.reader.argument) {
-                        furnace.status = "Done";
+                    if (furnace.completedActions >= instruction.argument) {
+                        furnace.cardIndex++;
+                        furnace.commandTimer = 0.0f;
+                        if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
+                            furnace.status = "Done";
+                        }
+                        else {
+                            furnace.completedActions = 0;
+                            furnace.status = "Next card";
+                        }
                     }
+                }
+            }
+        }
+
+        // Добыча по установленной карте RUN.
+        for (int row = 0; row < ROWS; row++) {
+            for (int col = 0; col < COLS; col++) {
+                if (grid[row][col] != TileType::Drill) {
+                    continue;
+                }
+
+                DrillStorage& drill = drills[row][col];
+
+                if (drill.reader.amount == 0) {
+                    drill.status = "Insert card";
+                    continue;
+                }
+
+                if (drill.cardIndex >= (int)drill.reader.cards.size()) {
+                    drill.status = "Done";
+                    continue;
+                }
+
+                const CardInstruction& instruction =
+                    drill.reader.cards[drill.cardIndex];
+
+                bool isIron = drillDeposits[row][col] == TileType::IronOre;
+                ItemType resource = isIron ? ItemType::IronOre : ItemType::Coal;
+
+                if (instruction.command == 1) {
+                    if (resourceAmount[row][col] == 0) {
+                        drill.status = "DEPOSIT DEPLETED";
+                        continue;
+                    }
+                    if (drill.output.amount >= GetMaxStack(resource)) {
+                        drill.status = "OUTPUT FULL";
+                        continue;
+                    }
+                }
+
+                if (drill.energy == 0) {
+                    if (drill.fuel.amount == 0) {
+                        drill.status = "FUEL EXHAUSTED";
+                        continue;
+                    }
+
+                    drill.fuel.amount--;
+                    if (drill.fuel.amount == 0) {
+                        drill.fuel = {};
+                    }
+                    drill.energy = 3;
+                }
+
+                if (instruction.command == 2) {
+                    drill.status = "Reading BACK";
+                    drill.commandTimer += GetFrameTime();
+
+                    if (drill.commandTimer < 0.2f) {
+                        continue;
+                    }
+
+                    if (instruction.argument > drill.cardIndex) {
+                        drill.status = "INVALID BACK";
+                        continue;
+                    }
+
+                    drill.cardIndex -= instruction.argument;
+                    drill.completedActions = 0;
+                    drill.commandTimer = 0.0f;
+                    continue;
+                }
+
+                if (instruction.command != 1) {
+                    drill.status = "UNSUPPORTED COMMAND";
+                    continue;
+                }
+
+                drill.status = "Mining";
+                drill.hitTimer += GetFrameTime();
+
+                if (drill.hitTimer < 0.4f) {
+                    continue;
+                }
+
+                drill.hitTimer = 0.0f;
+                drill.energy--;
+                drill.completedActions++;
+                durability[row][col]--;
+
+                if (durability[row][col] <= 0) {
+                    drill.output.type = resource;
+                    drill.output.amount++;
+                    resourceAmount[row][col]--;
+
+                    if (resourceAmount[row][col] > 0) {
+                        durability[row][col] = isIron ? 3 : 2;
+                    }
+                }
+
+                if (drill.completedActions >= instruction.argument) {
+                    drill.cardIndex++;
+                    drill.commandTimer = 0.0f;
+
+                    if (drill.cardIndex >= (int)drill.reader.cards.size()) {
+                        drill.status = "Done";
+                    }
+                    else {
+                        drill.completedActions = 0;
+                        drill.status = "Next card";
+                    }
+                }
+                else if (resourceAmount[row][col] == 0) {
+                    drill.status = "DEPOSIT DEPLETED";
+                }
+                else if (drill.energy == 0 && drill.fuel.amount == 0) {
+                    drill.status = "FUEL EXHAUSTED";
                 }
             }
         }
@@ -1586,11 +1984,31 @@ int main() {
                     furnaces[openedFurnaceY][openedFurnaceX].reader;
                 const FurnaceStorage& furnace =
                     furnaces[openedFurnaceY][openedFurnaceX];
+                const CardInstruction* shownCard = nullptr;
+                int shownIndex = furnace.cardIndex;
+                if (card.amount > 0 && !card.cards.empty()) {
+                    if (shownIndex >= (int)card.cards.size()) {
+                        shownIndex = (int)card.cards.size() - 1;
+                    }
+                    shownCard = &card.cards[shownIndex];
+                    DrawText(
+                        TextFormat("Card: %i/%i", shownIndex + 1, (int)card.cards.size()),
+                        100, 270, 16, WHITE
+                    );
+                }
+
                 DrawRectangle(10, 425, 590, 25, DARKGRAY);
                 DrawText(furnace.status, 20, 430, 16, WHITE);
-                if (card.amount > 0 && card.command == 1) {
+                if (shownCard != nullptr &&
+                    shownCard->command == 2 && shownCard->argument > shownIndex) {
                     DrawText(
-                        TextFormat("%i/%i", furnace.completedActions, card.argument),
+                        TextFormat("Card %i: BACK max %i", shownIndex + 1, shownIndex),
+                        250, 430, 16, RED
+                    );
+                }
+                if (shownCard != nullptr && shownCard->command == 1) {
+                    DrawText(
+                        TextFormat("%i/%i", furnace.completedActions, shownCard->argument),
                         105, 235, 18, WHITE
                     );
                 }
@@ -1602,18 +2020,125 @@ int main() {
                     DrawRectangle(100, 215, (int)(75 * progress), 10, GREEN);
                     DrawRectangleLines(100, 215, 75, 10, WHITE);
                 }
-                if (card.amount == 0) {
+                if (shownCard == nullptr) {
                     DrawText("Insert card", 35, 375, 16, LIGHTGRAY);
                 }
                 else {
                     const char* name = "UNKNOWN";
-                    if (card.command == 1) name = "RUN";
-                    else if (card.command == 2) name = "BACK";
-                    else if (card.command == 3) name = "REVERSE";
-                    else if (card.command == 4) name = "SLOT";
+                    if (shownCard->command == 1) name = "RUN";
+                    else if (shownCard->command == 2) name = "BACK";
+                    else if (shownCard->command == 3) name = "REVERSE";
+                    else if (shownCard->command == 4) name = "SLOT";
 
-                    const char* label = card.command == 3
-                        ? name : TextFormat("%s %i", name, card.argument);
+                    const char* label = shownCard->command == 3
+                        ? name : TextFormat("%s %i", name, shownCard->argument);
+                    DrawText(label, 35, 375, 18, GOLD);
+                }
+            }
+
+            if (openedDrillX != -1 && openedDrillY != -1) {
+                DrawRectangle(10, 60, 180, 350, DARKGRAY);
+                DrawText("Drill", 25, 75, 24, WHITE);
+
+                const char* labels[] = {
+                    "1. Coal",
+                    "2. Output"
+                };
+
+                for (int i = 0; i < 2; i++) {
+                    int slotY = 130 + i * 85;
+                    Rectangle slot = {
+                        25.0f, (float)slotY, 60.0f, 60.0f
+                    };
+
+                    DrawText(labels[i], 25, slotY - 20, 16, WHITE);
+                    DrawRectangleRec(slot, GRAY);
+                    DrawRectangleLinesEx(slot, 1, WHITE);
+                }
+
+                const InventorySlot& fuel =
+                    drills[openedDrillY][openedDrillX].fuel;
+
+                if (fuel.amount > 0) {
+                    DrawCircle(55, 155, 15, BLACK);
+                    DrawText(TextFormat("%i", fuel.amount), 55, 170, 16, WHITE);
+                }
+
+                const DrillStorage& drill = drills[openedDrillY][openedDrillX];
+
+                const CardInstruction* shownCard = nullptr;
+                int shownIndex = drill.cardIndex;
+
+                if (drill.reader.amount > 0 && !drill.reader.cards.empty()) {
+                    if (shownIndex >= (int)drill.reader.cards.size()) {
+                        shownIndex = (int)drill.reader.cards.size() - 1;
+                    }
+                    shownCard = &drill.reader.cards[shownIndex];
+                    DrawText(
+                        TextFormat(
+                            "Card: %i/%i",
+                            shownIndex + 1, (int)drill.reader.cards.size()
+                        ),
+                        25, 340, 16, WHITE
+                    );
+                }
+
+                if (drill.output.amount > 0) {
+                    Color color = drill.output.type == ItemType::Coal ? BLACK : BROWN;
+                    DrawCircle(55, 240, 15, color);
+                    DrawText(
+                        TextFormat("%i", drill.output.amount),
+                        55, 255, 16, WHITE
+                    );
+                }
+
+                if (shownCard != nullptr && shownCard->command == 1) {
+                    DrawText(
+                        TextFormat(
+                            "Hits: %i/%i",
+                            drill.completedActions, shownCard->argument
+                        ),
+                        25, 290, 18, WHITE
+                    );
+                }
+
+                if (shownCard != nullptr && shownCard->command == 1) {
+
+                    float progress = drill.hitTimer / 0.4f;
+                    if (progress < 0.0f) progress = 0.0f;
+                    if (progress > 1.0f) progress = 1.0f;
+
+                    DrawRectangle(25, 320, 150, 10, GRAY);
+                    DrawRectangle(25, 320, (int)(150 * progress), 10, GREEN);
+                    DrawRectangleLines(25, 320, 150, 10, WHITE);
+                }
+
+                DrawRectangle(10, 425, 590, 25, DARKGRAY);
+                DrawText(drill.status, 20, 430, 16, WHITE);
+                if (shownCard != nullptr &&
+                    shownCard->command == 2 &&
+                    shownCard->argument > shownIndex) {
+                    DrawText(
+                        TextFormat("Card %i: BACK max %i", shownIndex + 1, shownIndex),
+                        250, 430, 16, RED
+                    );
+                }
+
+                Rectangle reader = {25, 365, 150, 35};
+                DrawRectangleRec(reader, GRAY);
+                DrawRectangleLinesEx(reader, 1, WHITE);
+                if (shownCard == nullptr) {
+                    DrawText("Insert card", 35, 375, 16, LIGHTGRAY);
+                }
+                else {
+                    const char* name = "UNKNOWN";
+                    if (shownCard->command == 1) name = "RUN";
+                    else if (shownCard->command == 2) name = "BACK";
+                    else if (shownCard->command == 3) name = "REVERSE";
+                    else if (shownCard->command == 4) name = "SLOT";
+
+                    const char* label = shownCard->command == 3
+                        ? name : TextFormat("%s %i", name, shownCard->argument);
                     DrawText(label, 35, 375, 18, GOLD);
                 }
             }
@@ -1743,7 +2268,7 @@ int main() {
                     else if (inventory[i].type == ItemType::PunchedCard) {
                         DrawPunchedCard(
                             slotX + 12, slotY + 15,
-                            inventory[i].command, inventory[i].argument
+                            inventory[i].cards.front().command, inventory[i].cards.front().argument
                         );
                     }
 
@@ -1849,7 +2374,7 @@ int main() {
                 else if (item.type == ItemType::PunchedCard) {
                     DrawPunchedCard(
                         (int)mouse.x - 18, (int)mouse.y - 11,
-                        item.command, item.argument
+                        item.cards.front().command, item.cards.front().argument
                     );
                 }
                 else if (item.type == ItemType::BlankCard) {
@@ -1909,15 +2434,22 @@ int main() {
                     else if (inventory[i].type == ItemType::BlankCard) {
                         itemName = "Blank Card";
                     }
+                    else if (inventory[i].type == ItemType::PunchedCard &&
+                             inventory[i].cards.size() > 1) {
+                        itemName = TextFormat(
+                            "Card chain: %i cards",
+                            (int)inventory[i].cards.size()
+                        );
+                    }
                     else if (inventory[i].type == ItemType::PunchedCard) {
                         const char* name = "UNKNOWN";
-                        if (inventory[i].command == 1) name = "RUN";
-                        else if (inventory[i].command == 2) name = "BACK";
-                        else if (inventory[i].command == 3) name = "REVERSE";
-                        else if (inventory[i].command == 4) name = "SLOT";
+                        if (inventory[i].cards.front().command == 1) name = "RUN";
+                        else if (inventory[i].cards.front().command == 2) name = "BACK";
+                        else if (inventory[i].cards.front().command == 3) name = "REVERSE";
+                        else if (inventory[i].cards.front().command == 4) name = "SLOT";
 
-                        itemName = inventory[i].command == 3
-                            ? name : TextFormat("%s %i", name, inventory[i].argument);
+                        itemName = inventory[i].cards.front().command == 3
+                            ? name : TextFormat("%s %i", name, inventory[i].cards.front().argument);
                     }
 
                     // Размер подсказки
@@ -1992,6 +2524,15 @@ int main() {
             
         }
         
+        if (inventoryOpen && !puncherOpen &&
+            selectedSlot != -1 &&
+            inventory[selectedSlot].type == ItemType::PunchedCard) {
+            DrawText(
+                "Shift+Click: join cards | X: detach last",
+                220, 40, 16, WHITE
+            );
+        }
+
         if (inventoryFullTimer > 0.0f) {
             DrawText("INVENTORY FULL", 10, 65, 20, RED);
         }
