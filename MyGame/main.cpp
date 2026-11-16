@@ -165,6 +165,8 @@ int main() {
     InventorySlot inventory[INVENTORY_SIZE] = {};
     
     int selectedSlot = -1;
+    int previewSlot = -1;
+    int previewOffset = 0;
     int splitSource = -1;
     bool puncherOpen = false;
     int puncherSlot = -1;
@@ -2407,6 +2409,79 @@ int main() {
                 if (CheckCollisionPointRec(mouse, slot) &&
                     inventory[i].amount > 0) {
 
+                    if (!puncherOpen &&
+                        inventory[i].type == ItemType::PunchedCard) {
+
+                        const auto& cards = inventory[i].cards;
+                        int count = (int)cards.size();
+
+                        if (previewSlot != i) {
+                            previewSlot = i;
+                            previewOffset = 0;
+                        }
+
+                        int visibleCount = count < 6 ? count : 6;
+                        int maxOffset = count - visibleCount;
+
+                        float wheel = GetMouseWheelMove();
+                        if (wheel > 0) previewOffset--;
+                        if (wheel < 0) previewOffset++;
+                        if (previewOffset < 0) previewOffset = 0;
+                        if (previewOffset > maxOffset) previewOffset = maxOffset;
+
+                        int width = 240;
+                        int height = 40 + visibleCount * 24;
+                        if (maxOffset > 0) height += 24;
+
+                        int tooltipX = (int)mouse.x + 15;
+                        int tooltipY = (int)mouse.y + 15;
+                        if (tooltipX + width > GetScreenWidth()) {
+                            tooltipX = GetScreenWidth() - width;
+                        }
+                        if (tooltipY + height > GetScreenHeight()) {
+                            tooltipY = GetScreenHeight() - height;
+                        }
+
+                        DrawRectangle(tooltipX, tooltipY, width, height, DARKGRAY);
+                        DrawRectangleLines(tooltipX, tooltipY, width, height, GOLD);
+                        DrawText(
+                            TextFormat("Cards: %i", count),
+                            tooltipX + 10, tooltipY + 8, 18, GOLD
+                        );
+
+                        for (int row = 0; row < visibleCount; row++) {
+                            int index = previewOffset + row;
+                            const CardInstruction& instruction = cards[index];
+                            const char* name = "UNKNOWN";
+                            if (instruction.command == 1) name = "RUN";
+                            else if (instruction.command == 2) name = "BACK";
+                            else if (instruction.command == 3) name = "REVERSE";
+                            else if (instruction.command == 4) name = "SLOT";
+
+                            const char* line = instruction.command == 3
+                                ? TextFormat("%i. %s", index + 1, name)
+                                : TextFormat(
+                                    "%i. %s %i", index + 1, name, instruction.argument
+                                );
+                            DrawText(
+                                line,
+                                tooltipX + 10, tooltipY + 34 + row * 24,
+                                18, WHITE
+                            );
+                        }
+
+                        if (maxOffset > 0) {
+                            DrawText(
+                                "Mouse wheel: scroll",
+                                tooltipX + 10, tooltipY + height - 24,
+                                16, LIGHTGRAY
+                            );
+                        }
+
+                        // Подсказку для карты уже нарисовали.
+                        break;
+                    }
+
                     const char* itemName = "Unknown";
 
                     if (inventory[i].type == ItemType::IronOre) {
@@ -2433,13 +2508,6 @@ int main() {
 
                     else if (inventory[i].type == ItemType::BlankCard) {
                         itemName = "Blank Card";
-                    }
-                    else if (inventory[i].type == ItemType::PunchedCard &&
-                             inventory[i].cards.size() > 1) {
-                        itemName = TextFormat(
-                            "Card chain: %i cards",
-                            (int)inventory[i].cards.size()
-                        );
                     }
                     else if (inventory[i].type == ItemType::PunchedCard) {
                         const char* name = "UNKNOWN";
