@@ -88,11 +88,170 @@ void DrawRollerItem(int x, int y) {
     }
 }
 
-void DrawRollerTile(int x, int y, Color color) {
-    DrawRectangle(x, y + 2, 20, 16, Fade(color, 0.35f));
-    for (int i = 0; i < 3; i++) {
-        DrawRectangle(x + 3 + i * 6, y + 4, 3, 12, color);
+enum class RollerSide {
+    Left,
+    Right,
+    Up,
+    Down
+};
+
+struct RollerCell {
+    int x;
+    int y;
+};
+
+struct RollerEnd {
+    RollerCell cell;
+    RollerSide side;
+};
+
+struct RollerStep {
+    RollerCell cell;
+    RollerSide exitSide;
+};
+
+struct RollerDirectionChoice {
+    RollerEnd start;
+    Rectangle hitbox;
+};
+
+struct RollerLine {
+    std::vector<RollerCell> cells;
+    std::vector<RollerEnd> ends;
+};
+
+bool HasRollerSide(int shape, RollerSide side) {
+    // Порядок форм: ─ │ └ ┌ ┐ ┘
+    switch (side) {
+        case RollerSide::Left:
+            return shape == 0 || shape == 4 || shape == 5;
+        case RollerSide::Right:
+            return shape == 0 || shape == 2 || shape == 3;
+        case RollerSide::Up:
+            return shape == 1 || shape == 2 || shape == 5;
+        case RollerSide::Down:
+            return shape == 1 || shape == 3 || shape == 4;
     }
+
+    return false;
+}
+
+RollerSide OppositeSide(RollerSide side) {
+    switch (side) {
+        case RollerSide::Left:  return RollerSide::Right;
+        case RollerSide::Right: return RollerSide::Left;
+        case RollerSide::Up:    return RollerSide::Down;
+        case RollerSide::Down:  return RollerSide::Up;
+    }
+    return RollerSide::Left;
+}
+
+RollerCell NeighborCell(RollerCell cell, RollerSide side) {
+    switch (side) {
+        case RollerSide::Left:  cell.x--; break;
+        case RollerSide::Right: cell.x++; break;
+        case RollerSide::Up:    cell.y--; break;
+        case RollerSide::Down:  cell.y++; break;
+    }
+    return cell;
+}
+
+RollerSide OtherRollerSide(int shape, RollerSide side) {
+    const RollerSide sides[] = {
+        RollerSide::Left, RollerSide::Right,
+        RollerSide::Up, RollerSide::Down
+    };
+    for (RollerSide candidate : sides) {
+        if (candidate != side && HasRollerSide(shape, candidate)) {
+            return candidate;
+        }
+    }
+    return side;
+}
+
+void DrawRollerArrow(RollerCell cell, RollerSide side, int tileSize) {
+    Vector2 center = {
+        cell.x * tileSize + tileSize / 2.0f,
+        cell.y * tileSize + tileSize / 2.0f
+    };
+    RollerCell neighbor = NeighborCell(cell, side);
+    Vector2 direction = {
+        (float)(neighbor.x - cell.x),
+        (float)(neighbor.y - cell.y)
+    };
+    Vector2 tip = {
+        center.x + direction.x * 6,
+        center.y + direction.y * 6
+    };
+    Vector2 tail = {
+        center.x - direction.x * 4,
+        center.y - direction.y * 4
+    };
+    Vector2 wingA = {
+        tip.x - direction.x * 3 - direction.y * 3,
+        tip.y - direction.y * 3 + direction.x * 3
+    };
+    Vector2 wingB = {
+        tip.x - direction.x * 3 + direction.y * 3,
+        tip.y - direction.y * 3 - direction.x * 3
+    };
+    DrawLineEx(tail, tip, 2, BLUE);
+    DrawLineEx(tip, wingA, 2, BLUE);
+    DrawLineEx(tip, wingB, 2, BLUE);
+}
+
+void DrawRollerTile(int x, int y, int shape, Color color) {
+    bool left  = HasRollerSide(shape, RollerSide::Left);
+    bool right = HasRollerSide(shape, RollerSide::Right);
+    bool up    = HasRollerSide(shape, RollerSide::Up);
+    bool down  = HasRollerSide(shape, RollerSide::Down);
+
+    Color base = Fade(color, 0.35f);
+
+    DrawRectangle(x + 6, y + 6, 8, 8, base);
+
+    if (left) {
+        DrawRectangle(x, y + 6, 6, 8, base);
+        DrawRectangle(x + 2, y + 6, 2, 8, color);
+    }
+    if (right) {
+        DrawRectangle(x + 14, y + 6, 6, 8, base);
+        DrawRectangle(x + 16, y + 6, 2, 8, color);
+    }
+    if (up) {
+        DrawRectangle(x + 6, y, 8, 6, base);
+        DrawRectangle(x + 6, y + 2, 8, 2, color);
+    }
+    if (down) {
+        DrawRectangle(x + 6, y + 14, 8, 6, base);
+        DrawRectangle(x + 6, y + 16, 8, 2, color);
+    }
+}
+
+struct DeveloperItem {
+    ItemType type;
+    const char* name;
+};
+
+const DeveloperItem developerItems[] = {
+    {ItemType::IronOre,   "Iron Ore"},
+    {ItemType::Coal,      "Coal"},
+    {ItemType::Stone,     "Stone"},
+    {ItemType::Wood,      "Wood"},
+    {ItemType::IronPlate, "Iron Plate"},
+    {ItemType::Furnace,   "Furnace"},
+    {ItemType::Drill,     "Drill"},
+    {ItemType::Roller,    "Roller"},
+    {ItemType::BlankCard, "Blank Card"}
+};
+
+Rectangle GetDeveloperButtonRect(int index) {
+    return {
+        (float)(145 + index % 3 * 175),
+        (float)(125 + index / 3 * 75),
+        160,
+        60
+    };
 }
 
 int main() {
@@ -197,6 +356,205 @@ int main() {
     float craftTimer = 0.0f;
     
     TileType grid[ROWS][COLS] = {};
+    int rollerShapes[ROWS][COLS] = {};
+    bool rollerControllers[ROWS][COLS] = {};
+    InventorySlot rollerFuel[ROWS][COLS] = {};
+    bool rollerDirectionSet[ROWS][COLS] = {};
+    RollerSide rollerEntrySides[ROWS][COLS] = {};
+    auto isRollerConnected = [&](int col, int row, RollerSide side) {
+        if (col < 0 || col >= COLS || row < 0 || row >= ROWS) {
+            return false;
+        }
+
+        if (grid[row][col] != TileType::Roller ||
+            !HasRollerSide(rollerShapes[row][col], side)) {
+            return false;
+        }
+
+        int neighborX = col;
+        int neighborY = row;
+        RollerSide opposite = RollerSide::Right;
+
+        switch (side) {
+            case RollerSide::Left:
+                neighborX--;
+                opposite = RollerSide::Right;
+                break;
+            case RollerSide::Right:
+                neighborX++;
+                opposite = RollerSide::Left;
+                break;
+            case RollerSide::Up:
+                neighborY--;
+                opposite = RollerSide::Down;
+                break;
+            case RollerSide::Down:
+                neighborY++;
+                opposite = RollerSide::Up;
+                break;
+        }
+
+        if (neighborX < 0 || neighborX >= COLS ||
+            neighborY < 0 || neighborY >= ROWS) {
+            return false;
+        }
+
+        return grid[neighborY][neighborX] == TileType::Roller &&
+            HasRollerSide(rollerShapes[neighborY][neighborX], opposite);
+    };
+
+    auto getRollerLine = [&](int startX, int startY) {
+        RollerLine line;
+
+        if (startX < 0 || startX >= COLS ||
+            startY < 0 || startY >= ROWS ||
+            grid[startY][startX] != TileType::Roller) {
+            return line;
+        }
+
+        const RollerSide sides[] = {
+            RollerSide::Left, RollerSide::Right,
+            RollerSide::Up, RollerSide::Down
+        };
+        const int dx[] = {-1, 1, 0, 0};
+        const int dy[] = {0, 0, -1, 1};
+
+        bool visited[ROWS][COLS] = {};
+        visited[startY][startX] = true;
+        line.cells.push_back({startX, startY});
+
+        for (int i = 0; i < (int)line.cells.size(); i++) {
+            // Копируем клетку: push_back может переместить массив.
+            RollerCell cell = line.cells[i];
+
+            for (int direction = 0; direction < 4; direction++) {
+                RollerSide side = sides[direction];
+
+                if (!HasRollerSide(
+                        rollerShapes[cell.y][cell.x], side)) {
+                    continue;
+                }
+
+                if (!isRollerConnected(cell.x, cell.y, side)) {
+                    line.ends.push_back({cell, side});
+                    continue;
+                }
+
+                int nextX = cell.x + dx[direction];
+                int nextY = cell.y + dy[direction];
+
+                if (!visited[nextY][nextX]) {
+                    visited[nextY][nextX] = true;
+                    line.cells.push_back({nextX, nextY});
+                }
+            }
+        }
+
+        return line;
+    };
+
+    auto getDirectedLine = [&](RollerEnd start) {
+        std::vector<RollerStep> route;
+        bool visited[ROWS][COLS] = {};
+        RollerCell cell = start.cell;
+        RollerSide entrySide = start.side;
+        const RollerSide sides[] = {
+            RollerSide::Left, RollerSide::Right,
+            RollerSide::Up, RollerSide::Down
+        };
+
+        while (cell.x >= 0 && cell.x < COLS &&
+               cell.y >= 0 && cell.y < ROWS &&
+               grid[cell.y][cell.x] == TileType::Roller &&
+               !visited[cell.y][cell.x]) {
+            int shape = rollerShapes[cell.y][cell.x];
+            if (!HasRollerSide(shape, entrySide)) {
+                break;
+            }
+            visited[cell.y][cell.x] = true;
+            RollerSide exitSide = entrySide;
+            for (RollerSide side : sides) {
+                if (side != entrySide && HasRollerSide(shape, side)) {
+                    exitSide = side;
+                    break;
+                }
+            }
+            route.push_back({cell, exitSide});
+            if (!isRollerConnected(cell.x, cell.y, exitSide)) {
+                break;
+            }
+            cell = NeighborCell(cell, exitSide);
+            entrySide = OppositeSide(exitSide);
+        }
+        return route;
+    };
+
+    auto getDirectionChoices = [&](int controllerX, int controllerY) {
+        std::vector<RollerDirectionChoice> choices;
+        RollerLine line = getRollerLine(controllerX, controllerY);
+        if (line.cells.empty()) {
+            return choices;
+        }
+        if (!line.ends.empty()) {
+            for (const RollerEnd& end : line.ends) {
+                Rectangle hitbox = {
+                    (float)(end.cell.x * TILE_SIZE),
+                    (float)(end.cell.y * TILE_SIZE),
+                    (float)TILE_SIZE, (float)TILE_SIZE
+                };
+                if (line.cells.size() == 1) {
+                    RollerCell neighbor = NeighborCell(end.cell, end.side);
+                    float markerX = hitbox.x + TILE_SIZE / 2.0f +
+                        (neighbor.x - end.cell.x) * 7;
+                    float markerY = hitbox.y + TILE_SIZE / 2.0f +
+                        (neighbor.y - end.cell.y) * 7;
+                    hitbox = {markerX - 3, markerY - 3, 6, 6};
+                }
+                choices.push_back({end, hitbox});
+            }
+        }
+        else {
+            const RollerSide sides[] = {
+                RollerSide::Left, RollerSide::Right,
+                RollerSide::Up, RollerSide::Down
+            };
+            RollerCell controller = {controllerX, controllerY};
+            int shape = rollerShapes[controllerY][controllerX];
+            for (RollerSide exitSide : sides) {
+                if (!isRollerConnected(controllerX, controllerY, exitSide)) {
+                    continue;
+                }
+                RollerCell neighbor = NeighborCell(controller, exitSide);
+                RollerSide entrySide = OtherRollerSide(shape, exitSide);
+                choices.push_back({
+                    {controller, entrySide},
+                    {
+                        (float)(neighbor.x * TILE_SIZE),
+                        (float)(neighbor.y * TILE_SIZE),
+                        (float)TILE_SIZE, (float)TILE_SIZE
+                    }
+                });
+            }
+        }
+        return choices;
+    };
+
+    auto getControllerRoute = [&](int col, int row) {
+        RollerSide entrySide = rollerEntrySides[row][col];
+        int shape = rollerShapes[row][col];
+        auto backward = getDirectedLine({
+            {col, row}, OtherRollerSide(shape, entrySide)
+        });
+        if (backward.empty()) {
+            return std::vector<RollerStep>{};
+        }
+        const RollerStep& last = backward.back();
+        if (!isRollerConnected(last.cell.x, last.cell.y, last.exitSide)) {
+            return getDirectedLine({last.cell, last.exitSide});
+        }
+        return getDirectedLine({{col, row}, entrySide});
+    };
+
     TileType drillDeposits[ROWS][COLS] = {};
     int durability[ROWS][COLS] = {};
     int resourceAmount[ROWS][COLS] = {};
@@ -284,6 +642,7 @@ int main() {
     bool placingFurnace = false;
     bool placingDrill = false;
     bool placingRoller = false;
+    int selectedRollerShape = 0;
     
     float miningCooldown = 0.0f;
     float hitAnimationTimer = 0.0f;
@@ -299,738 +658,863 @@ int main() {
     int openedFurnaceY = -1;
     int openedDrillX = -1;
     int openedDrillY = -1;
+    int openedRollerX = -1;
+    int openedRollerY = -1;
+
+    int choosingControllerX = -1;
+    int choosingControllerY = -1;
+    bool developerPanelOpen = false;
 
     while (!WindowShouldClose()) {
 
-        bool furnacePlacedThisFrame = false;
-        bool drillPlacedThisFrame = false;
-
-        int oldX = x;
-
-        if (IsKeyDown(KEY_RIGHT)) x += speed;
-        if (IsKeyDown(KEY_LEFT)) x -= speed;
-
-        if (x < 0) x = 0;
-        if (x > 760) x = 760;
-
         Rectangle wall = {500, 150, 100, 50};
-        Rectangle player = {(float)x, (float)y, 40, 40};
-
-        if (CheckCollisionRecs(player, wall)) {
-            x = oldX;
-        }
-
-        int oldY = y;
-
-        if (IsKeyDown(KEY_UP)) y -= speed;
-        if (IsKeyDown(KEY_DOWN)) y += speed;
-
-        if (y < 0) y = 0;
-        if (y > 410) y = 410;
-
-        player = {(float)x, (float)y, 40, 40};
-
-        if (CheckCollisionRecs(player, wall)) {
-            y = oldY;
-        }
-        
-        player = {(float)x, (float)y, 40, 40};
-
-        if (!coinCollected) {
-            if (CheckCollisionCircleRec({(float)coinX, (float)coinY}, 15, player)) {
-                coinCollected = true;
-                score += 1;
-            }
-        }
-        
-        // ==========================================
-        // INPUT — Переключение объектов
-        // ==========================================
-
-        // Клавиша 1 — стена
-        if (IsKeyPressed(KEY_ONE)) {
-            selectedTile = TileType::Wall;
-            placingFurnace = false;
-            placingDrill = false;
-            placingRoller = false;
-        }
-
-        // Клавиша 2 — шестерёнка
-        if (IsKeyPressed(KEY_TWO)) {
-            selectedTile = TileType::Gear;
-            placingFurnace = false;
-            placingDrill = false;
-            placingRoller = false;
-        }
-
-        // Клавиша 3 — генератор
-        if (IsKeyPressed(KEY_THREE)) {
-            selectedTile = TileType::Generator;
-            placingFurnace = false;
-            placingDrill = false;
-            placingRoller = false;
-        }
-
-        
-        if (IsKeyPressed(KEY_ZERO)) {
-            selectedTile = TileType::Empty;
-            placingFurnace = false;
-            placingDrill = false;
-            placingRoller = false;
-        }
-        
-        // ==========================================
-        // BUILDING — Проверка возможности строительства
-        // ==========================================
-
-        // Получаем позицию мыши
         Vector2 mouse = GetMousePosition();
-
-        // Преобразуем координаты мыши в координаты клетки
         int cellX = (int)mouse.x / TILE_SIZE;
         int cellY = (int)mouse.y / TILE_SIZE;
-
-        // Проверяем, находится ли курсор внутри карты
         bool insideMap =
             cellX >= 0 && cellX < COLS &&
             cellY >= 0 && cellY < ROWS;
-
-        // Можно ли построить объект?
         bool canBuild = false;
+        int command = 0;
+        int argument = 0;
+        const char* commandName = "UNKNOWN";
+        int stoneCount = 0;
+        int woodCount = 0;
+        int plateCount = 0;
+        Rectangle craftButton = {615, 132, 170, 24};
+        Rectangle cardButton = {615, 192, 170, 24};
+        Rectangle drillButton = {615, 252, 170, 24};
+        Rectangle rollerButton = {615, 312, 170, 24};
+        Rectangle punchButton = {185, 375, 170, 30};
+        Rectangle controllerButton = {25, 130, 150, 40};
+        Rectangle rollerFuelRect = {25, 215, 60, 60};
+        int punchedCardSlot = -1;
+        bool validPattern = false;
+        bool hasBlank = false;
+        bool canPunch = false;
 
-        if (insideMap) {
-
-            // Прямоугольник выбранной клетки
-            Rectangle cell = {
-                (float)(cellX * TILE_SIZE),
-                (float)(cellY * TILE_SIZE),
-                (float)TILE_SIZE,
-                (float)TILE_SIZE
-            };
-
-            // Проверяем, свободна ли клетка
-            bool isEmpty =
-                grid[cellY][cellX] == TileType::Empty;
-
-            // Проверяем столкновение с персонажем
-            bool playerCollision =
-                CheckCollisionRecs(cell, player);
-
-            // Проверяем столкновение со стеной
-            bool wallCollision =
-                CheckCollisionRecs(cell, wall);
-
-            bool isDeposit =
-                grid[cellY][cellX] == TileType::IronOre ||
-                grid[cellY][cellX] == TileType::Coal;
-            bool suitableTile = placingDrill
-                ? isDeposit && resourceAmount[cellY][cellX] > 0
-                : isEmpty;
-
-            // Проверяем место для выбранной постройки.
-            canBuild =
-                suitableTile &&
-                !playerCollision &&
-                !wallCollision;
-
-            // ЛКМ — строим
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-                canBuild &&
-                !inventoryOpen &&
-                !placingFurnace && !placingDrill && !placingRoller &&
-                selectedTile != TileType::Empty) {
-
-                grid[cellY][cellX] = selectedTile;
-            }
-            
-            // Установка печи из инвентаря
-            if (placingFurnace &&
-                !inventoryOpen &&
-                canBuild &&
-                IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-
-                // Ищем печь в инвентаре
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-
-                    if (inventory[i].type == ItemType::Furnace &&
-                        inventory[i].amount > 0) {
-
-                        // Устанавливаем печь
-                        grid[cellY][cellX] = TileType::Furnace;
-                        furnacePlacedThisFrame = true;
-
-                        // Расходуем один предмет
-                        inventory[i].amount--;
-
-                        if (inventory[i].amount == 0) {
-                            inventory[i].type = ItemType::Empty;
-                        }
-
-                        // Выходим из режима размещения
-                        placingFurnace = false;
-                        placingDrill = false;
-                        placingRoller = false;
-
-                        break;
-                    }
-                }
-            }
-
-            // Установка изготовленного бура поверх залежи.
-            if (placingDrill &&
-                !inventoryOpen &&
-                canBuild &&
-                IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-                    if (inventory[i].type != ItemType::Drill ||
-                        inventory[i].amount == 0) {
-                        continue;
-                    }
-                    drillDeposits[cellY][cellX] = grid[cellY][cellX];
-                    grid[cellY][cellX] = TileType::Drill;
-                    drillPlacedThisFrame = true;
-                    inventory[i].amount--;
-                    if (inventory[i].amount == 0) {
-                        inventory[i] = {};
-                    }
-                    placingDrill = false;
-                    placingRoller = false;
-                    break;
-                }
-            }
-
-            if (placingRoller &&
-                !inventoryOpen &&
-                canBuild &&
-                IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-                    if (inventory[i].type != ItemType::Roller ||
-                        inventory[i].amount == 0) {
-                        continue;
-                    }
-                    grid[cellY][cellX] = TileType::Roller;
-                    inventory[i].amount--;
-                    if (inventory[i].amount == 0) {
-                        inventory[i] = {};
-                    }
-                    placingRoller = false;
-                    break;
-                }
-            }
-
-            // Пока ПКМ удаляет только тестовые постройки.
-            if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !inventoryOpen) {
-                TileType tile = grid[cellY][cellX];
-                if (tile == TileType::Wall ||
-                    tile == TileType::Gear ||
-                    tile == TileType::Generator) {
-                    grid[cellY][cellX] = TileType::Empty;
-                }
+        // Сохраняем блокировку до конца кадра отмены или выбора.
+        bool directionInputBlocked = choosingControllerX != -1;
+        bool directionSelectionStartedThisFrame = false;
+        bool panelToggled = IsKeyPressed(KEY_F1);
+        if (panelToggled) {
+            developerPanelOpen = !developerPanelOpen;
+            if (developerPanelOpen) {
+                choosingControllerX = -1;
+                choosingControllerY = -1;
+                inventoryOpen = false;
+                puncherOpen = false;
+                puncherSlot = -1;
+                openedFurnaceX = -1;
+                openedFurnaceY = -1;
+                openedDrillX = -1;
+                openedDrillY = -1;
+                openedRollerX = -1;
+                openedRollerY = -1;
+                selectedSlot = -1;
+                splitSource = -1;
+                previewSlot = -1;
+                previewOffset = 0;
             }
         }
-        
-        if (miningCooldown > 0.0f) {
-            miningCooldown -= GetFrameTime();
-        }
-        
-        if (hitAnimationTimer > 0.0f) {
-            hitAnimationTimer -= GetFrameTime();
-        }
-        
+
         if (inventoryFullTimer > 0.0f) {
             inventoryFullTimer -= GetFrameTime();
         }
 
-        // ==========================================
-        // Разбор печи или бура
-        // ==========================================
-
-        bool canDismantle = false;
-
-        if (insideMap &&
-            !inventoryOpen &&
-            IsMouseButtonDown(MOUSE_BUTTON_RIGHT) &&
-            (grid[cellY][cellX] == TileType::Furnace ||
-             grid[cellY][cellX] == TileType::Drill ||
-             grid[cellY][cellX] == TileType::Roller)) {
-
-            Vector2 playerCenter = {
-                (float)x + 20,
-                (float)y + 20
-            };
-
-            Vector2 furnaceCenter = {
-                (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
-                (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
-            };
-
-            canDismantle = CheckCollisionPointCircle(
-                furnaceCenter, playerCenter, 60.0f
-            );
-        }
-
-        if (canDismantle) {
-            // При переходе на другую постройку начинаем заново.
-            if (dismantleX != cellX || dismantleY != cellY) {
-                dismantleX = cellX;
-                dismantleY = cellY;
-                dismantleTimer = 0.0f;
-            }
-
-            dismantleTimer += GetFrameTime();
-
-            if (dismantleTimer >= DISMANTLE_TIME) {
-                dismantleTimer = DISMANTLE_TIME;
-
-                if (grid[cellY][cellX] == TileType::Roller) {
-                    int remaining = addToInventory(
-                        inventory, INVENTORY_SIZE, ItemType::Roller, 1
-                    );
-                    if (remaining == 0) {
-                        grid[cellY][cellX] = TileType::Empty;
-                        dismantleX = -1;
-                        dismantleY = -1;
-                        dismantleTimer = 0.0f;
-                    }
-                    else {
-                        inventoryFullTimer = 1.0f;
-                    }
+        if (developerPanelOpen && !panelToggled &&
+            IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            for (int i = 0; i < 9; i++) {
+                if (!CheckCollisionPointRec(mouse, GetDeveloperButtonRect(i))) {
+                    continue;
                 }
-                else if (grid[cellY][cellX] == TileType::Drill) {
-                    DrillStorage& drill = drills[cellY][cellX];
-
-                    InventorySlot candidate[INVENTORY_SIZE];
-                    for (int i = 0; i < INVENTORY_SIZE; i++) {
-                        candidate[i] = inventory[i];
-                    }
-
-                    int drillLeft = addToInventory(
-                        candidate, INVENTORY_SIZE, ItemType::Drill, 1
-                    );
-                    int coalLeft = addToInventory(
-                        candidate, INVENTORY_SIZE, ItemType::Coal, drill.fuel.amount
-                    );
-
-                    int outputLeft = addToInventory(
-                        candidate, INVENTORY_SIZE,
-                        drill.output.type, drill.output.amount
-                    );
-
-                    bool cardFits = drill.reader.amount == 0;
-                    if (!cardFits) {
-                        for (int i = 0; i < INVENTORY_SIZE; i++) {
-                            if (candidate[i].amount == 0) {
-                                candidate[i] = drill.reader;
-                                cardFits = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (drillLeft == 0 && coalLeft == 0 &&
-                        outputLeft == 0 && cardFits) {
-                        for (int i = 0; i < INVENTORY_SIZE; i++) {
-                            inventory[i] = candidate[i];
-                        }
-
-                        drill = {};
-                        grid[cellY][cellX] = resourceAmount[cellY][cellX] > 0
-                            ? drillDeposits[cellY][cellX] : TileType::Empty;
-                        drillDeposits[cellY][cellX] = TileType::Empty;
-                        dismantleX = -1;
-                        dismantleY = -1;
-                        dismantleTimer = 0.0f;
-                    }
-                    else {
-                        inventoryFullTimer = 1.0f;
-                    }
+                int remaining = addToInventory(
+                    inventory, INVENTORY_SIZE, developerItems[i].type, 10
+                );
+                if (remaining > 0) {
+                    inventoryFullTimer = 1.0f;
                 }
-                else {
-                    FurnaceStorage& furnace = furnaces[cellY][cellX];
-
-                    // Проверяем вместимость на копии инвентаря.
-                    InventorySlot candidate[INVENTORY_SIZE];
-                    for (int i = 0; i < INVENTORY_SIZE; i++) {
-                        candidate[i] = inventory[i];
-                    }
-
-                    int furnaceLeft = addToInventory(
-                        candidate, INVENTORY_SIZE, ItemType::Furnace, 1
-                    );
-                    int oreLeft = addToInventory(
-                        candidate, INVENTORY_SIZE,
-                        ItemType::IronOre,
-                        furnace.ore.amount + (furnace.smelting ? 1 : 0)
-                    );
-                    int platesLeft = addToInventory(
-                        candidate, INVENTORY_SIZE,
-                        ItemType::IronPlate, furnace.output.amount
-                    );
-                    int coalLeft = addToInventory(
-                        candidate, INVENTORY_SIZE,
-                        ItemType::Coal, furnace.fuel.amount
-                    );
-
-                    bool cardFits = furnace.reader.amount == 0;
-                    if (!cardFits) {
-                        for (int i = 0; i < INVENTORY_SIZE; i++) {
-                            if (candidate[i].amount == 0) {
-                                candidate[i] = furnace.reader;
-                                cardFits = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (furnaceLeft == 0 && oreLeft == 0 && coalLeft == 0 &&
-                        platesLeft == 0 && cardFits) {
-                        // Всё помещается — применяем результат.
-                        for (int i = 0; i < INVENTORY_SIZE; i++) {
-                            inventory[i] = candidate[i];
-                        }
-
-                        furnace = {};
-                        grid[cellY][cellX] = TileType::Empty;
-
-                        dismantleX = -1;
-                        dismantleY = -1;
-                        dismantleTimer = 0.0f;
-                    }
-                    else {
-                        inventoryFullTimer = 1.0f;
-                    }
-                }
+                break;
             }
         }
-        else {
-            // Отпустили кнопку, отвели курсор или отошли.
-            dismantleX = -1;
-            dismantleY = -1;
-            dismantleTimer = 0.0f;
-        }
 
-        // ==========================================
-        // MINING — Добыча рукой
-        // ==========================================
+        // На паузе рисуем мир, но не обновляем его состояние.
+        if (!developerPanelOpen && !panelToggled) {
+            bool furnacePlacedThisFrame = false;
+            bool drillPlacedThisFrame = false;
+            bool rollerPlacedThisFrame = false;
+            bool rollerOpenedThisFrame = false;
 
-        if (selectedTile == TileType::Empty &&
-            !placingFurnace && !placingDrill && !placingRoller &&
-            insideMap &&
-            IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inventoryOpen && miningCooldown <= 0.0f) {
+            int oldX = x;
 
-            if (grid[cellY][cellX] == TileType::IronOre ||
-                grid[cellY][cellX] == TileType::Coal ||
-                grid[cellY][cellX] == TileType::Boulder ||
-                grid[cellY][cellX] == TileType::Tree) {
+            if (IsKeyDown(KEY_RIGHT)) x += speed;
+            if (IsKeyDown(KEY_LEFT)) x -= speed;
+
+            if (x < 0) x = 0;
+            if (x > 760) x = 760;
+
+            Rectangle player = {(float)x, (float)y, 40, 40};
+
+            if (CheckCollisionRecs(player, wall)) {
+                x = oldX;
+            }
+
+            int oldY = y;
+
+            if (IsKeyDown(KEY_UP)) y -= speed;
+            if (IsKeyDown(KEY_DOWN)) y += speed;
+
+            if (y < 0) y = 0;
+            if (y > 410) y = 410;
+
+            player = {(float)x, (float)y, 40, 40};
+
+            if (CheckCollisionRecs(player, wall)) {
+                y = oldY;
+            }
+
+            player = {(float)x, (float)y, 40, 40};
+
+            if (!coinCollected) {
+                if (CheckCollisionCircleRec({(float)coinX, (float)coinY}, 15, player)) {
+                    coinCollected = true;
+                    score += 1;
+                }
+            }
+
+            // ==========================================
+            // INPUT — Переключение объектов
+            // ==========================================
+
+            // Клавиша 1 — стена
+            if (!directionInputBlocked && IsKeyPressed(KEY_ONE)) {
+                selectedTile = TileType::Wall;
+                placingFurnace = false;
+                placingDrill = false;
+                placingRoller = false;
+            }
+
+            // Клавиша 2 — шестерёнка
+            if (!directionInputBlocked && IsKeyPressed(KEY_TWO)) {
+                selectedTile = TileType::Gear;
+                placingFurnace = false;
+                placingDrill = false;
+                placingRoller = false;
+            }
+
+            // Клавиша 3 — генератор
+            if (!directionInputBlocked && IsKeyPressed(KEY_THREE)) {
+                selectedTile = TileType::Generator;
+                placingFurnace = false;
+                placingDrill = false;
+                placingRoller = false;
+            }
+
+            if (!directionInputBlocked && IsKeyPressed(KEY_ZERO)) {
+                selectedTile = TileType::Empty;
+                placingFurnace = false;
+                placingDrill = false;
+                placingRoller = false;
+            }
+
+            // ==========================================
+            // BUILDING — Проверка возможности строительства
+            // ==========================================
+
+            if (placingRoller && !inventoryOpen && !directionInputBlocked && IsKeyPressed(KEY_R)) {
+                selectedRollerShape = (selectedRollerShape + 1) % 6;
+            }
+
+            // Проверяем возможность строительства в выбранной клетке.
+            if (insideMap) {
+
+                // Прямоугольник выбранной клетки
+                Rectangle cell = {
+                    (float)(cellX * TILE_SIZE),
+                    (float)(cellY * TILE_SIZE),
+                    (float)TILE_SIZE,
+                    (float)TILE_SIZE
+                };
+
+                // Проверяем, свободна ли клетка
+                bool isEmpty =
+                    grid[cellY][cellX] == TileType::Empty;
+
+                // Проверяем столкновение с персонажем
+                bool playerCollision =
+                    CheckCollisionRecs(cell, player);
+
+                // Проверяем столкновение со стеной
+                bool wallCollision =
+                    CheckCollisionRecs(cell, wall);
+
+                bool isDeposit =
+                    grid[cellY][cellX] == TileType::IronOre ||
+                    grid[cellY][cellX] == TileType::Coal;
+                bool suitableTile = placingDrill
+                    ? isDeposit && resourceAmount[cellY][cellX] > 0
+                    : isEmpty;
+
+                // Проверяем место для выбранной постройки.
+                canBuild =
+                    suitableTile &&
+                    !playerCollision &&
+                    !wallCollision;
+
+                // ЛКМ — строим
+                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                    canBuild &&
+                    !inventoryOpen && !directionInputBlocked &&
+                    !placingFurnace && !placingDrill && !placingRoller &&
+                    selectedTile != TileType::Empty) {
+
+                    grid[cellY][cellX] = selectedTile;
+                }
+
+                // Установка печи из инвентаря
+                if (placingFurnace &&
+                    !inventoryOpen && !directionInputBlocked &&
+                    canBuild &&
+                    IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+
+                    // Ищем печь в инвентаре
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+
+                        if (inventory[i].type == ItemType::Furnace &&
+                            inventory[i].amount > 0) {
+
+                            // Устанавливаем печь
+                            grid[cellY][cellX] = TileType::Furnace;
+                            furnacePlacedThisFrame = true;
+
+                            // Расходуем один предмет
+                            inventory[i].amount--;
+
+                            if (inventory[i].amount == 0) {
+                                inventory[i].type = ItemType::Empty;
+                            }
+
+                            // Выходим из режима размещения
+                            placingFurnace = false;
+                            placingDrill = false;
+                            placingRoller = false;
+
+                            break;
+                        }
+                    }
+                }
+
+                // Установка изготовленного бура поверх залежи.
+                if (placingDrill &&
+                    !inventoryOpen && !directionInputBlocked &&
+                    canBuild &&
+                    IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+                        if (inventory[i].type != ItemType::Drill ||
+                            inventory[i].amount == 0) {
+                            continue;
+                        }
+                        drillDeposits[cellY][cellX] = grid[cellY][cellX];
+                        grid[cellY][cellX] = TileType::Drill;
+                        drillPlacedThisFrame = true;
+                        inventory[i].amount--;
+                        if (inventory[i].amount == 0) {
+                            inventory[i] = {};
+                        }
+                        placingDrill = false;
+                        placingRoller = false;
+                        break;
+                    }
+                }
+
+                if (placingRoller &&
+                    !inventoryOpen && !directionInputBlocked &&
+                    canBuild &&
+                    IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+                        if (inventory[i].type != ItemType::Roller ||
+                            inventory[i].amount == 0) {
+                            continue;
+                        }
+                        grid[cellY][cellX] = TileType::Roller;
+                        rollerShapes[cellY][cellX] = selectedRollerShape;
+                        rollerControllers[cellY][cellX] = false;
+                        rollerDirectionSet[cellY][cellX] = false;
+                        rollerPlacedThisFrame = true;
+                        rollerFuel[cellY][cellX] = {};
+                        inventory[i].amount--;
+                        if (inventory[i].amount == 0) {
+                            inventory[i] = {};
+                        }
+                        placingRoller = false;
+                        break;
+                    }
+                }
+
+                // Пока ПКМ удаляет только тестовые постройки.
+                if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !inventoryOpen && !directionInputBlocked) {
+                    TileType tile = grid[cellY][cellX];
+                    if (tile == TileType::Wall ||
+                        tile == TileType::Gear ||
+                        tile == TileType::Generator) {
+                        grid[cellY][cellX] = TileType::Empty;
+                    }
+                }
+            }
+
+            if (miningCooldown > 0.0f) {
+                miningCooldown -= GetFrameTime();
+            }
+
+            if (hitAnimationTimer > 0.0f) {
+                hitAnimationTimer -= GetFrameTime();
+            }
+
+            // ==========================================
+            // Разбор печи или бура
+            // ==========================================
+
+            bool canDismantle = false;
+
+            if (insideMap &&
+                !inventoryOpen && !directionInputBlocked &&
+                IsMouseButtonDown(MOUSE_BUTTON_RIGHT) &&
+                (grid[cellY][cellX] == TileType::Furnace ||
+                 grid[cellY][cellX] == TileType::Drill ||
+                 grid[cellY][cellX] == TileType::Roller)) {
 
                 Vector2 playerCenter = {
                     (float)x + 20,
                     (float)y + 20
                 };
 
-                Vector2 oreCenter = {
-                    (float)(cellX * TILE_SIZE + 10),
-                    (float)(cellY * TILE_SIZE + 10)
+                Vector2 furnaceCenter = {
+                    (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
+                    (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
                 };
-                
-                // Определяем, какой предмет получим
-                ItemType resourceType = ItemType::Empty;
 
-                if (grid[cellY][cellX] == TileType::IronOre) {
-                    resourceType = ItemType::IronOre;
-                }
-                else if (grid[cellY][cellX] == TileType::Coal) {
-                    resourceType = ItemType::Coal;
-                }
-                else if (grid[cellY][cellX] == TileType::Boulder) {
-                    resourceType = ItemType::Stone;
-                }
-                else if (grid[cellY][cellX] == TileType::Tree) {
-                    resourceType = ItemType::Wood;
-                }
-
-                // Проверяем, есть ли место для предмета
-                bool hasSpace = false;
-
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-
-                    // Подходит пустой слот
-                    if (inventory[i].amount == 0) {
-                        hasSpace = true;
-                        break;
-                    }
-
-                    // Или неполная стопка такого же ресурса
-                    if (inventory[i].type == resourceType &&
-                        inventory[i].amount < GetMaxStack(resourceType)) {
-
-                        hasSpace = true;
-                        break;
-                    }
-                }
-                
-                bool inReach = CheckCollisionPointCircle(
-                    oreCenter, playerCenter, 60.0f
+                canDismantle = CheckCollisionPointCircle(
+                    furnaceCenter, playerCenter, 60.0f
                 );
+            }
 
-                if (inReach && !hasSpace) {
-                    inventoryFullTimer = 1.0f;
+            if (canDismantle) {
+                // При переходе на другую постройку начинаем заново.
+                if (dismantleX != cellX || dismantleY != cellY) {
+                    dismantleX = cellX;
+                    dismantleY = cellY;
+                    dismantleTimer = 0.0f;
                 }
 
-                if (inReach && hasSpace) {
-                    
-                    miningCooldown = 0.4f;
-                    
-                    hitAnimationTimer = 0.15f;
-                    hitPosition = oreCenter;
-                    
-                    durability[cellY][cellX] -= 1;
-                    
-                    if (durability[cellY][cellX] <= 0) {
-                        
-                        ItemType minedType = ItemType::Empty;
-                        
-                        // Определяем, какой ресурс добыли
-                        if (grid[cellY][cellX] == TileType::IronOre) {
-                            minedType = ItemType::IronOre;
-                        }
-                        else if (grid[cellY][cellX] == TileType::Coal) {
-                            minedType = ItemType::Coal;
-                        }
-                        else if (grid[cellY][cellX] == TileType::Boulder) {
-                            minedType = ItemType::Stone;
-                        }
-                        else if (grid[cellY][cellX] == TileType::Tree) {
-                            minedType = ItemType::Wood;
-                        }
-                        
-                        int maxStack = GetMaxStack(minedType);
-                        
-                        bool itemAdded = false;
-                        
-                        // Ищем слот с таким же предметом, в котором есть место
+                dismantleTimer += GetFrameTime();
+
+                if (dismantleTimer >= DISMANTLE_TIME) {
+                    dismantleTimer = DISMANTLE_TIME;
+
+                    if (grid[cellY][cellX] == TileType::Roller) {
+                        InventorySlot candidate[INVENTORY_SIZE];
                         for (int i = 0; i < INVENTORY_SIZE; i++) {
-                            
-                            if (inventory[i].type == minedType &&
-                                inventory[i].amount < maxStack) {
-                                
-                                inventory[i].amount += 1;
-                                itemAdded = true;
-                                break;
-                            }
+                            candidate[i] = inventory[i];
                         }
-                        
-                        // Если подходящего предмета нет, ищем пустой слот
-                        if (!itemAdded) {
+                        int rollerLeft = addToInventory(
+                            candidate, INVENTORY_SIZE, ItemType::Roller, 1
+                        );
+                        int coalLeft = addToInventory(
+                            candidate, INVENTORY_SIZE, ItemType::Coal,
+                            rollerFuel[cellY][cellX].amount
+                        );
+                        if (rollerLeft == 0 && coalLeft == 0) {
                             for (int i = 0; i < INVENTORY_SIZE; i++) {
-                                
-                                if (inventory[i].type == ItemType::Empty || inventory[i].amount == 0) {
-                                    inventory[i].type = minedType;
-                                    inventory[i].amount = 1;
-                                    itemAdded = true;
+                                inventory[i] = candidate[i];
+                            }
+                            rollerFuel[cellY][cellX] = {};
+                            grid[cellY][cellX] = TileType::Empty;
+                            rollerShapes[cellY][cellX] = 0;
+                            rollerControllers[cellY][cellX] = false;
+                            rollerDirectionSet[cellY][cellX] = false;
+                            dismantleX = -1;
+                            dismantleY = -1;
+                            dismantleTimer = 0.0f;
+                        }
+                        else {
+                            inventoryFullTimer = 1.0f;
+                        }
+                    }
+                    else if (grid[cellY][cellX] == TileType::Drill) {
+                        DrillStorage& drill = drills[cellY][cellX];
+
+                        InventorySlot candidate[INVENTORY_SIZE];
+                        for (int i = 0; i < INVENTORY_SIZE; i++) {
+                            candidate[i] = inventory[i];
+                        }
+
+                        int drillLeft = addToInventory(
+                            candidate, INVENTORY_SIZE, ItemType::Drill, 1
+                        );
+                        int coalLeft = addToInventory(
+                            candidate, INVENTORY_SIZE, ItemType::Coal, drill.fuel.amount
+                        );
+
+                        int outputLeft = addToInventory(
+                            candidate, INVENTORY_SIZE,
+                            drill.output.type, drill.output.amount
+                        );
+
+                        bool cardFits = drill.reader.amount == 0;
+                        if (!cardFits) {
+                            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                                if (candidate[i].amount == 0) {
+                                    candidate[i] = drill.reader;
+                                    cardFits = true;
                                     break;
                                 }
                             }
                         }
-                        
-                        // Удаляем руду только после добавления в инвентарь
-                        if (itemAdded) {
-                            resourceAmount[cellY][cellX]--;
 
-                            if (resourceAmount[cellY][cellX] <= 0) {
-                                grid[cellY][cellX] = TileType::Empty;
+                        if (drillLeft == 0 && coalLeft == 0 &&
+                            outputLeft == 0 && cardFits) {
+                            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                                inventory[i] = candidate[i];
                             }
-                            else {
-                                if (minedType == ItemType::IronOre) {
-                                    durability[cellY][cellX] = 3;
-                                }
-                                else if (minedType == ItemType::Coal) {
-                                    durability[cellY][cellX] = 2;
+
+                            drill = {};
+                            grid[cellY][cellX] = resourceAmount[cellY][cellX] > 0
+                                ? drillDeposits[cellY][cellX] : TileType::Empty;
+                            drillDeposits[cellY][cellX] = TileType::Empty;
+                            dismantleX = -1;
+                            dismantleY = -1;
+                            dismantleTimer = 0.0f;
+                        }
+                        else {
+                            inventoryFullTimer = 1.0f;
+                        }
+                    }
+                    else {
+                        FurnaceStorage& furnace = furnaces[cellY][cellX];
+
+                        // Проверяем вместимость на копии инвентаря.
+                        InventorySlot candidate[INVENTORY_SIZE];
+                        for (int i = 0; i < INVENTORY_SIZE; i++) {
+                            candidate[i] = inventory[i];
+                        }
+
+                        int furnaceLeft = addToInventory(
+                            candidate, INVENTORY_SIZE, ItemType::Furnace, 1
+                        );
+                        int oreLeft = addToInventory(
+                            candidate, INVENTORY_SIZE,
+                            ItemType::IronOre,
+                            furnace.ore.amount + (furnace.smelting ? 1 : 0)
+                        );
+                        int platesLeft = addToInventory(
+                            candidate, INVENTORY_SIZE,
+                            ItemType::IronPlate, furnace.output.amount
+                        );
+                        int coalLeft = addToInventory(
+                            candidate, INVENTORY_SIZE,
+                            ItemType::Coal, furnace.fuel.amount
+                        );
+
+                        bool cardFits = furnace.reader.amount == 0;
+                        if (!cardFits) {
+                            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                                if (candidate[i].amount == 0) {
+                                    candidate[i] = furnace.reader;
+                                    cardFits = true;
+                                    break;
                                 }
                             }
                         }
+
+                        if (furnaceLeft == 0 && oreLeft == 0 && coalLeft == 0 &&
+                            platesLeft == 0 && cardFits) {
+                            // Всё помещается — применяем результат.
+                            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                                inventory[i] = candidate[i];
+                            }
+
+                            furnace = {};
+                            grid[cellY][cellX] = TileType::Empty;
+
+                            dismantleX = -1;
+                            dismantleY = -1;
+                            dismantleTimer = 0.0f;
+                        }
+                        else {
+                            inventoryFullTimer = 1.0f;
+                        }
                     }
-
                 }
-            }
-        }
-        
-        if (inventoryOpen &&
-            !puncherOpen &&
-            selectedSlot != -1 &&
-            inventory[selectedSlot].type == ItemType::BlankCard &&
-            IsKeyPressed(KEY_P)) {
-
-            puncherOpen = true;
-            puncherSlot = selectedSlot;
-            for (int i = 0; i < 4; i++) {
-                commandHoles[i] = false;
-                argumentHoles[i] = false;
-            }
-            selectedSlot = -1;
-            splitSource = -1;
-        }
-
-        if (IsKeyPressed(KEY_E)) {
-            if (puncherOpen) {
-                puncherOpen = false;
-                puncherSlot = -1;
             }
             else {
-                inventoryOpen = !inventoryOpen;
-                if (!inventoryOpen) {
-                    splitSource = -1;
+                // Отпустили кнопку, отвели курсор или отошли.
+                dismantleX = -1;
+                dismantleY = -1;
+                dismantleTimer = 0.0f;
+            }
+
+            // ==========================================
+            // MINING — Добыча рукой
+            // ==========================================
+
+            if (selectedTile == TileType::Empty &&
+                !placingFurnace && !placingDrill && !placingRoller &&
+                insideMap &&
+                IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inventoryOpen && !directionInputBlocked && miningCooldown <= 0.0f) {
+
+                if (grid[cellY][cellX] == TileType::IronOre ||
+                    grid[cellY][cellX] == TileType::Coal ||
+                    grid[cellY][cellX] == TileType::Boulder ||
+                    grid[cellY][cellX] == TileType::Tree) {
+
+                    Vector2 playerCenter = {
+                        (float)x + 20,
+                        (float)y + 20
+                    };
+
+                    Vector2 oreCenter = {
+                        (float)(cellX * TILE_SIZE + 10),
+                        (float)(cellY * TILE_SIZE + 10)
+                    };
+
+                    // Определяем, какой предмет получим
+                    ItemType resourceType = ItemType::Empty;
+
+                    if (grid[cellY][cellX] == TileType::IronOre) {
+                        resourceType = ItemType::IronOre;
+                    }
+                    else if (grid[cellY][cellX] == TileType::Coal) {
+                        resourceType = ItemType::Coal;
+                    }
+                    else if (grid[cellY][cellX] == TileType::Boulder) {
+                        resourceType = ItemType::Stone;
+                    }
+                    else if (grid[cellY][cellX] == TileType::Tree) {
+                        resourceType = ItemType::Wood;
+                    }
+
+                    // Проверяем, есть ли место для предмета
+                    bool hasSpace = false;
+
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+
+                        // Подходит пустой слот
+                        if (inventory[i].amount == 0) {
+                            hasSpace = true;
+                            break;
+                        }
+
+                        // Или неполная стопка такого же ресурса
+                        if (inventory[i].type == resourceType &&
+                            inventory[i].amount < GetMaxStack(resourceType)) {
+
+                            hasSpace = true;
+                            break;
+                        }
+                    }
+
+                    bool inReach = CheckCollisionPointCircle(
+                        oreCenter, playerCenter, 60.0f
+                    );
+
+                    if (inReach && !hasSpace) {
+                        inventoryFullTimer = 1.0f;
+                    }
+
+                    if (inReach && hasSpace) {
+
+                        miningCooldown = 0.4f;
+
+                        hitAnimationTimer = 0.15f;
+                        hitPosition = oreCenter;
+
+                        durability[cellY][cellX] -= 1;
+
+                        if (durability[cellY][cellX] <= 0) {
+
+                            ItemType minedType = ItemType::Empty;
+
+                            // Определяем, какой ресурс добыли
+                            if (grid[cellY][cellX] == TileType::IronOre) {
+                                minedType = ItemType::IronOre;
+                            }
+                            else if (grid[cellY][cellX] == TileType::Coal) {
+                                minedType = ItemType::Coal;
+                            }
+                            else if (grid[cellY][cellX] == TileType::Boulder) {
+                                minedType = ItemType::Stone;
+                            }
+                            else if (grid[cellY][cellX] == TileType::Tree) {
+                                minedType = ItemType::Wood;
+                            }
+
+                            int maxStack = GetMaxStack(minedType);
+
+                            bool itemAdded = false;
+
+                            // Ищем слот с таким же предметом, в котором есть место
+                            for (int i = 0; i < INVENTORY_SIZE; i++) {
+
+                                if (inventory[i].type == minedType &&
+                                    inventory[i].amount < maxStack) {
+
+                                    inventory[i].amount += 1;
+                                    itemAdded = true;
+                                    break;
+                                }
+                            }
+
+                            // Если подходящего предмета нет, ищем пустой слот
+                            if (!itemAdded) {
+                                for (int i = 0; i < INVENTORY_SIZE; i++) {
+
+                                    if (inventory[i].type == ItemType::Empty || inventory[i].amount == 0) {
+                                        inventory[i].type = minedType;
+                                        inventory[i].amount = 1;
+                                        itemAdded = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Удаляем руду только после добавления в инвентарь
+                            if (itemAdded) {
+                                resourceAmount[cellY][cellX]--;
+
+                                if (resourceAmount[cellY][cellX] <= 0) {
+                                    grid[cellY][cellX] = TileType::Empty;
+                                }
+                                else {
+                                    if (minedType == ItemType::IronOre) {
+                                        durability[cellY][cellX] = 3;
+                                    }
+                                    else if (minedType == ItemType::Coal) {
+                                        durability[cellY][cellX] = 2;
+                                    }
+                                }
+                            }
+                        }
+
+                    }
                 }
             }
-        }
 
-        if (puncherOpen && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            if (inventoryOpen &&
+                !puncherOpen &&
+                selectedSlot != -1 &&
+                inventory[selectedSlot].type == ItemType::BlankCard &&
+                IsKeyPressed(KEY_P)) {
+
+                puncherOpen = true;
+                puncherSlot = selectedSlot;
+                for (int i = 0; i < 4; i++) {
+                    commandHoles[i] = false;
+                    argumentHoles[i] = false;
+                }
+                selectedSlot = -1;
+                splitSource = -1;
+            }
+
+            if (IsKeyPressed(KEY_E)) {
+                if (directionInputBlocked) {
+                    choosingControllerX = -1;
+                    choosingControllerY = -1;
+                }
+                else if (puncherOpen) {
+                    puncherOpen = false;
+                    puncherSlot = -1;
+                }
+                else {
+                    inventoryOpen = !inventoryOpen;
+                    if (!inventoryOpen) {
+                        splitSource = -1;
+                    }
+                }
+            }
+
+            if (puncherOpen && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                for (int i = 0; i < 4; i++) {
+                    if (CheckCollisionPointRec(mouse, GetPunchHoleRect(0, i))) {
+                        commandHoles[i] = !commandHoles[i];
+                    }
+                    if (CheckCollisionPointRec(mouse, GetPunchHoleRect(1, i))) {
+                        argumentHoles[i] = !argumentHoles[i];
+                    }
+                }
+            }
+
             for (int i = 0; i < 4; i++) {
-                if (CheckCollisionPointRec(mouse, GetPunchHoleRect(0, i))) {
-                    commandHoles[i] = !commandHoles[i];
-                }
-                if (CheckCollisionPointRec(mouse, GetPunchHoleRect(1, i))) {
-                    argumentHoles[i] = !argumentHoles[i];
+                command = command * 2 + (commandHoles[i] ? 1 : 0);
+                if (argumentHoles[i]) {
+                    argument += 1 << i;
                 }
             }
-        }
 
-        int command = 0;
-        int argument = 0;
-        for (int i = 0; i < 4; i++) {
-            command = command * 2 + (commandHoles[i] ? 1 : 0);
-            if (argumentHoles[i]) {
-                argument += 1 << i;
+            if (command == 1) commandName = "RUN";
+            else if (command == 2) commandName = "BACK";
+            else if (command == 3) commandName = "REVERSE";
+            else if (command == 4) commandName = "SLOT";
+
+            validPattern =
+                ((command == 1 || command == 2 || command == 4) && argument > 0) ||
+                (command == 3 && argument == 0);
+
+            // Закрываем окно постройки вместе с инвентарём.
+            if (!inventoryOpen) {
+                openedFurnaceX = -1;
+                openedFurnaceY = -1;
+                openedDrillX = -1;
+                openedDrillY = -1;
+                openedRollerX = -1;
+                openedRollerY = -1;
             }
-        }
 
-        const char* commandName = "UNKNOWN";
-        if (command == 1) commandName = "RUN";
-        else if (command == 2) commandName = "BACK";
-        else if (command == 3) commandName = "REVERSE";
-        else if (command == 4) commandName = "SLOT";
+            // Открываем печь отдельным кликом.
+            if (!inventoryOpen && !directionInputBlocked &&
+                !placingFurnace && !placingDrill && !placingRoller &&
+                !furnacePlacedThisFrame &&
+                insideMap &&
+                IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                grid[cellY][cellX] == TileType::Furnace) {
 
-        bool validPattern =
-            ((command == 1 || command == 2 || command == 4) && argument > 0) ||
-            (command == 3 && argument == 0);
-        
-        // Закрываем окно постройки вместе с инвентарём.
-        if (!inventoryOpen) {
-            openedFurnaceX = -1;
-            openedFurnaceY = -1;
-            openedDrillX = -1;
-            openedDrillY = -1;
-        }
+                Vector2 playerCenter = {
+                    (float)x + 20,
+                    (float)y + 20
+                };
 
-        // Открываем печь отдельным кликом.
-        if (!inventoryOpen &&
-            !placingFurnace && !placingDrill && !placingRoller &&
-            !furnacePlacedThisFrame &&
-            insideMap &&
-            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-            grid[cellY][cellX] == TileType::Furnace) {
+                Vector2 furnaceCenter = {
+                    (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
+                    (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
+                };
 
-            Vector2 playerCenter = {
-                (float)x + 20,
-                (float)y + 20
-            };
-
-            Vector2 furnaceCenter = {
-                (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
-                (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
-            };
-
-            if (CheckCollisionPointCircle(
-                furnaceCenter, playerCenter, 60.0f
-            )) {
-                openedFurnaceX = cellX;
-                openedFurnaceY = cellY;
-                inventoryOpen = true;
+                if (CheckCollisionPointCircle(
+                    furnaceCenter, playerCenter, 60.0f
+                )) {
+                    openedFurnaceX = cellX;
+                    openedFurnaceY = cellY;
+                    inventoryOpen = true;
+                }
             }
-        }
 
-        // Открываем бур отдельным кликом в пределах досягаемости.
-        if (!inventoryOpen &&
-            !placingFurnace && !placingDrill && !placingRoller &&
-            !drillPlacedThisFrame &&
-            insideMap &&
-            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-            grid[cellY][cellX] == TileType::Drill) {
+            // Открываем бур отдельным кликом в пределах досягаемости.
+            if (!inventoryOpen && !directionInputBlocked &&
+                !placingFurnace && !placingDrill && !placingRoller &&
+                !drillPlacedThisFrame &&
+                insideMap &&
+                IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                grid[cellY][cellX] == TileType::Drill) {
 
-            Vector2 playerCenter = {
-                (float)x + 20,
-                (float)y + 20
-            };
+                Vector2 playerCenter = {
+                    (float)x + 20,
+                    (float)y + 20
+                };
 
-            Vector2 drillCenter = {
-                (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
-                (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
-            };
+                Vector2 drillCenter = {
+                    (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
+                    (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
+                };
 
-            if (CheckCollisionPointCircle(
-                drillCenter, playerCenter, 60.0f
-            )) {
-                openedDrillX = cellX;
-                openedDrillY = cellY;
-                inventoryOpen = true;
+                if (CheckCollisionPointCircle(
+                    drillCenter, playerCenter, 60.0f
+                )) {
+                    openedDrillX = cellX;
+                    openedDrillY = cellY;
+                    inventoryOpen = true;
+                }
             }
-        }
 
-        // Перемещение предметов в инвентаре
-        if (inventoryOpen && !puncherOpen) {
-            bool leftPressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
-            bool rightPressed = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
-            if (selectedSlot != -1 &&
-                inventory[selectedSlot].type == ItemType::PunchedCard &&
-                inventory[selectedSlot].cards.size() > 1 &&
-                IsKeyPressed(KEY_X)) {
+            // Обрабатываем кнопку до открытия окна, чтобы не нажать её
+            // тем же кликом, которым игрок открыл ролик.
+            if (inventoryOpen && !puncherOpen &&
+                openedRollerX != -1 && openedRollerY != -1 &&
+                IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                CheckCollisionPointRec(mouse, controllerButton)) {
+                if (!rollerDirectionSet[openedRollerY][openedRollerX]) {
+                    rollerControllers[openedRollerY][openedRollerX] = true;
+                    choosingControllerX = openedRollerX;
+                    choosingControllerY = openedRollerY;
+                    directionInputBlocked = true;
+                    directionSelectionStartedThisFrame = true;
+                    inventoryOpen = false;
+                    selectedSlot = -1;
+                    splitSource = -1;
+                    openedRollerX = -1;
+                    openedRollerY = -1;
+                }
+            }
 
-                int freeSlot = -1;
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-                    if (inventory[i].amount == 0) {
-                        freeSlot = i;
-                        break;
+            if (!inventoryOpen && !directionInputBlocked &&
+                !placingFurnace && !placingDrill && !placingRoller &&
+                !rollerPlacedThisFrame &&
+                insideMap &&
+                IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                grid[cellY][cellX] == TileType::Roller) {
+                Vector2 playerCenter = {
+                    (float)x + 20,
+                    (float)y + 20
+                };
+                Vector2 rollerCenter = {
+                    (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
+                    (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
+                };
+                if (CheckCollisionPointCircle(
+                        rollerCenter, playerCenter, 60.0f)) {
+                    openedRollerX = cellX;
+                    openedRollerY = cellY;
+                    inventoryOpen = true;
+                    rollerOpenedThisFrame = true;
+                }
+            }
+
+            // Перемещение предметов в инвентаре
+            if (inventoryOpen && !puncherOpen) {
+                bool leftPressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+                bool rightPressed = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
+                if (selectedSlot != -1 &&
+                    inventory[selectedSlot].type == ItemType::PunchedCard &&
+                    inventory[selectedSlot].cards.size() > 1 &&
+                    IsKeyPressed(KEY_X)) {
+
+                    int freeSlot = -1;
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+                        if (inventory[i].amount == 0) {
+                            freeSlot = i;
+                            break;
+                        }
+                    }
+
+                    if (freeSlot != -1) {
+                        InventorySlot& chain = inventory[selectedSlot];
+                        inventory[freeSlot] = {
+                            ItemType::PunchedCard, 1, {chain.cards.back()}
+                        };
+                        chain.cards.pop_back();
+                    }
+                    else {
+                        inventoryFullTimer = 1.0f;
                     }
                 }
 
-                if (freeSlot != -1) {
-                    InventorySlot& chain = inventory[selectedSlot];
-                    inventory[freeSlot] = {
-                        ItemType::PunchedCard, 1, {chain.cards.back()}
-                    };
-                    chain.cards.pop_back();
-                }
-                else {
-                    inventoryFullTimer = 1.0f;
-                }
-            }
+                int selectedBeforeClick = selectedSlot;
 
-            int selectedBeforeClick = selectedSlot;
-
-            if (openedDrillX != -1 && openedDrillY != -1 &&
-                (leftPressed || rightPressed)) {
-
-                InventorySlot& fuel =
-                    drills[openedDrillY][openedDrillX].fuel;
-                Rectangle fuelRect = {25, 130, 60, 60};
-
-                if (CheckCollisionPointRec(mouse, fuelRect)) {
+                if (openedRollerX != -1 && openedRollerY != -1 &&
+                    !rollerOpenedThisFrame &&
+                    rollerControllers[openedRollerY][openedRollerX] &&
+                    (leftPressed || rightPressed) &&
+                    CheckCollisionPointRec(mouse, rollerFuelRect)) {
+                    InventorySlot& fuel = rollerFuel[openedRollerY][openedRollerX];
                     if (selectedBeforeClick != -1) {
                         InventorySlot& source = inventory[selectedBeforeClick];
-
                         if (source.type == ItemType::Coal) {
                             int count = rightPressed ? 1 : source.amount;
                             int space = GetMaxStack(ItemType::Coal) - fuel.amount;
-
                             if (count > space) {
                                 count = space;
                             }
-
                             if (count > 0) {
                                 fuel.type = ItemType::Coal;
                                 fuel.amount += count;
                                 source.amount -= count;
-
                                 if (source.amount == 0) {
                                     source = {};
                                     selectedSlot = -1;
@@ -1043,9 +1527,7 @@ int main() {
                         int remaining = addToInventory(
                             inventory, INVENTORY_SIZE, ItemType::Coal, count
                         );
-
                         fuel.amount -= count - remaining;
-
                         if (fuel.amount == 0) {
                             fuel = {};
                         }
@@ -1054,56 +1536,324 @@ int main() {
                         }
                     }
                 }
-            }
 
-            if (openedDrillX != -1 && openedDrillY != -1 &&
-                selectedBeforeClick == -1 &&
-                (leftPressed || rightPressed)) {
+                if (openedDrillX != -1 && openedDrillY != -1 &&
+                    (leftPressed || rightPressed)) {
 
-                Rectangle outputRect = {25, 215, 60, 60};
-                InventorySlot& output =
-                    drills[openedDrillY][openedDrillX].output;
+                    InventorySlot& fuel =
+                        drills[openedDrillY][openedDrillX].fuel;
+                    Rectangle fuelRect = {25, 130, 60, 60};
 
-                if (CheckCollisionPointRec(mouse, outputRect) &&
-                    output.amount > 0) {
-                    int count = rightPressed ? 1 : output.amount;
-                    int remaining = addToInventory(
-                        inventory, INVENTORY_SIZE, output.type, count
-                    );
+                    if (CheckCollisionPointRec(mouse, fuelRect)) {
+                        if (selectedBeforeClick != -1) {
+                            InventorySlot& source = inventory[selectedBeforeClick];
 
-                    output.amount -= count - remaining;
-                    if (output.amount == 0) {
-                        output = {};
-                    }
-                    if (remaining > 0) {
-                        inventoryFullTimer = 1.0f;
-                    }
-                }
-            }
+                            if (source.type == ItemType::Coal) {
+                                int count = rightPressed ? 1 : source.amount;
+                                int space = GetMaxStack(ItemType::Coal) - fuel.amount;
 
-            if (openedDrillX != -1 && openedDrillY != -1 &&
-                leftPressed) {
+                                if (count > space) {
+                                    count = space;
+                                }
 
-                InventorySlot& card =
-                    drills[openedDrillY][openedDrillX].reader;
-                Rectangle readerRect = {25, 365, 150, 35};
+                                if (count > 0) {
+                                    fuel.type = ItemType::Coal;
+                                    fuel.amount += count;
+                                    source.amount -= count;
 
-                if (CheckCollisionPointRec(mouse, readerRect)) {
-                    if (selectedBeforeClick != -1) {
-                        InventorySlot& source = inventory[selectedBeforeClick];
+                                    if (source.amount == 0) {
+                                        source = {};
+                                        selectedSlot = -1;
+                                    }
+                                }
+                            }
+                        }
+                        else if (fuel.amount > 0) {
+                            int count = rightPressed ? 1 : fuel.amount;
+                            int remaining = addToInventory(
+                                inventory, INVENTORY_SIZE, ItemType::Coal, count
+                            );
 
-                        if (source.type == ItemType::PunchedCard &&
-                            card.amount == 0) {
-                            card = source;
-                            DrillStorage& drill = drills[openedDrillY][openedDrillX];
-                            drill.completedActions = 0;
-                            drill.cardIndex = 0;
-                            drill.commandTimer = 0.0f;
-                            source = {};
-                            selectedSlot = -1;
+                            fuel.amount -= count - remaining;
+
+                            if (fuel.amount == 0) {
+                                fuel = {};
+                            }
+                            if (remaining > 0) {
+                                inventoryFullTimer = 1.0f;
+                            }
                         }
                     }
-                    else if (card.amount > 0) {
+                }
+
+                if (openedDrillX != -1 && openedDrillY != -1 &&
+                    selectedBeforeClick == -1 &&
+                    (leftPressed || rightPressed)) {
+
+                    Rectangle outputRect = {25, 215, 60, 60};
+                    InventorySlot& output =
+                        drills[openedDrillY][openedDrillX].output;
+
+                    if (CheckCollisionPointRec(mouse, outputRect) &&
+                        output.amount > 0) {
+                        int count = rightPressed ? 1 : output.amount;
+                        int remaining = addToInventory(
+                            inventory, INVENTORY_SIZE, output.type, count
+                        );
+
+                        output.amount -= count - remaining;
+                        if (output.amount == 0) {
+                            output = {};
+                        }
+                        if (remaining > 0) {
+                            inventoryFullTimer = 1.0f;
+                        }
+                    }
+                }
+
+                if (openedDrillX != -1 && openedDrillY != -1 &&
+                    leftPressed) {
+
+                    InventorySlot& card =
+                        drills[openedDrillY][openedDrillX].reader;
+                    Rectangle readerRect = {25, 365, 150, 35};
+
+                    if (CheckCollisionPointRec(mouse, readerRect)) {
+                        if (selectedBeforeClick != -1) {
+                            InventorySlot& source = inventory[selectedBeforeClick];
+
+                            if (source.type == ItemType::PunchedCard &&
+                                card.amount == 0) {
+                                card = source;
+                                DrillStorage& drill = drills[openedDrillY][openedDrillX];
+                                drill.completedActions = 0;
+                                drill.cardIndex = 0;
+                                drill.commandTimer = 0.0f;
+                                source = {};
+                                selectedSlot = -1;
+                            }
+                        }
+                        else if (card.amount > 0) {
+                            int freeSlot = -1;
+                            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                                if (inventory[i].amount == 0) {
+                                    freeSlot = i;
+                                    break;
+                                }
+                            }
+
+                            if (freeSlot != -1) {
+                                inventory[freeSlot] = card;
+                                card = {};
+                            }
+                            else {
+                                inventoryFullTimer = 1.0f;
+                            }
+                        }
+                    }
+                }
+
+                // Первый клик выбирает стопку до следующего клика.
+                if (leftPressed && selectedBeforeClick == -1) {
+                    splitSource = -1;
+
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+
+                        Rectangle slot = GetInventorySlotRect(i);
+
+                        if (CheckCollisionPointRec(mouse, slot) &&
+                            inventory[i].amount > 0) {
+
+                            selectedSlot = i;
+                            placingFurnace = inventory[i].type == ItemType::Furnace;
+                            placingDrill = inventory[i].type == ItemType::Drill;
+                            placingRoller = inventory[i].type == ItemType::Roller;
+                            break;
+                        }
+                    }
+                }
+
+                // Выгрузка предметов из печи по клику.
+                if (openedFurnaceX != -1 &&
+                    openedFurnaceY != -1 &&
+                    selectedBeforeClick == -1 &&
+                    (leftPressed || rightPressed)) {
+                    FurnaceStorage& furnace =
+                        furnaces[openedFurnaceY][openedFurnaceX];
+
+                    InventorySlot* source = nullptr;
+                    if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(0))) {
+                        source = &furnace.ore;
+                    }
+                    else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(1))) {
+                        source = &furnace.fuel;
+                    }
+                    else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(2))) {
+                        source = &furnace.output;
+                    }
+
+                    if (source != nullptr && source->amount > 0) {
+                        int moveCount = source->amount;
+                        if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+                            moveCount = 1;
+                        }
+
+                        int remaining = addToInventory(
+                            inventory, INVENTORY_SIZE, source->type, moveCount
+                        );
+                        source->amount -= moveCount - remaining;
+
+                        if (source->amount == 0) {
+                            source->type = ItemType::Empty;
+                        }
+                        if (remaining > 0) {
+                            inventoryFullTimer = 1.0f;
+                        }
+                    }
+                }
+
+                // Следующий ЛКМ переносит стопку между слотами инвентаря.
+                if (leftPressed && selectedBeforeClick != -1) {
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+
+                        Rectangle slot = GetInventorySlotRect(i);
+
+                        if (CheckCollisionPointRec(mouse, slot)) {
+
+                            if (selectedSlot != i) {
+
+                                bool joiningCards =
+                                    (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
+                                    inventory[selectedSlot].type == ItemType::PunchedCard &&
+                                    inventory[i].type == ItemType::PunchedCard;
+
+                                if (joiningCards) {
+                                    InventorySlot& source = inventory[selectedSlot];
+                                    InventorySlot& target = inventory[i];
+
+                                    // Сначала выбранная цепочка, затем та, по которой нажали.
+                                    target.cards.insert(
+                                        target.cards.begin(),
+                                        source.cards.begin(),
+                                        source.cards.end()
+                                    );
+                                    source = {};
+                                }
+                                // Одинаковые предметы объединяем.
+                                else if (inventory[selectedSlot].type == inventory[i].type &&
+                                         inventory[i].type != ItemType::Empty) {
+
+                                    int freeSpace =
+                                        GetMaxStack(inventory[i].type) -
+                                        inventory[i].amount;
+
+                                    int moveCount = inventory[selectedSlot].amount;
+
+                                    if (moveCount > freeSpace) {
+                                        moveCount = freeSpace;
+                                    }
+
+                                    if (moveCount > 0) {
+                                        inventory[i].amount += moveCount;
+                                        inventory[selectedSlot].amount -= moveCount;
+                                    }
+
+                                    if (inventory[selectedSlot].amount == 0) {
+                                        inventory[selectedSlot].type = ItemType::Empty;
+                                    }
+                                }
+                                else {
+                                    // Разные предметы меняем местами
+                                    InventorySlot temp = inventory[selectedSlot];
+
+                                    inventory[selectedSlot] = inventory[i];
+                                    inventory[i] = temp;
+                                }
+                            }
+                            // Клик по исходному слоту отменяет выбор.
+                            placingFurnace = false;
+                            placingDrill = false;
+                            placingRoller = false;
+                            selectedSlot = -1;
+                            break;
+                        }
+                    }
+                }
+
+                // Выбранная стопка: ЛКМ кладёт всё, ПКМ — один предмет.
+                if (selectedBeforeClick != -1 &&
+                    selectedSlot != -1 &&
+                    openedFurnaceX != -1 &&
+                    openedFurnaceY != -1 &&
+                    (leftPressed || rightPressed)) {
+
+                    FurnaceStorage& furnace =
+                        furnaces[openedFurnaceY][openedFurnaceX];
+
+                    InventorySlot& source = inventory[selectedSlot];
+                    InventorySlot* target = nullptr;
+
+                    if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(0)) &&
+                        source.type == ItemType::IronOre) {
+                        target = &furnace.ore;
+                    }
+                    else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(1)) &&
+                             source.type == ItemType::Coal) {
+                        target = &furnace.fuel;
+                    }
+
+                    if (target != nullptr) {
+                        int moveCount = rightPressed ? 1 : source.amount;
+                        int freeSpace = GetMaxStack(source.type) - target->amount;
+                        if (moveCount > freeSpace) {
+                            moveCount = freeSpace;
+                        }
+
+                        if (moveCount > 0) {
+                            target->type = source.type;
+                            target->amount += moveCount;
+                            source.amount -= moveCount;
+
+                            if (source.amount == 0) {
+                                source.type = ItemType::Empty;
+                                selectedSlot = -1;
+                            }
+                        }
+                    }
+                }
+
+                // Установка карты сохраняет её команду и аргумент.
+                if (openedFurnaceX != -1 &&
+                    openedFurnaceY != -1 &&
+                    leftPressed &&
+                    CheckCollisionPointRec(mouse, GetFurnaceReaderRect()) &&
+                    selectedBeforeClick != -1 &&
+                    selectedSlot != -1) {
+
+                    FurnaceStorage& furnace =
+                        furnaces[openedFurnaceY][openedFurnaceX];
+                    InventorySlot& source = inventory[selectedSlot];
+                    if (source.type == ItemType::PunchedCard &&
+                        furnace.reader.amount == 0) {
+                        furnace.reader = source;
+                        furnace.completedActions = 0;
+                        furnace.cardIndex = 0;
+                        furnace.commandTimer = 0.0f;
+                        source = {};
+                        selectedSlot = -1;
+                    }
+                }
+
+                // Для извлечения карты нужен отдельный свободный слот.
+                if (openedFurnaceX != -1 &&
+                    openedFurnaceY != -1 &&
+                    leftPressed &&
+                    selectedBeforeClick == -1 &&
+                    CheckCollisionPointRec(mouse, GetFurnaceReaderRect())) {
+
+                    FurnaceStorage& furnace =
+                        furnaces[openedFurnaceY][openedFurnaceX];
+                    if (furnace.reader.amount > 0) {
                         int freeSlot = -1;
                         for (int i = 0; i < INVENTORY_SIZE; i++) {
                             if (inventory[i].amount == 0) {
@@ -1113,638 +1863,437 @@ int main() {
                         }
 
                         if (freeSlot != -1) {
-                            inventory[freeSlot] = card;
-                            card = {};
+                            inventory[freeSlot] = furnace.reader;
+                            furnace.reader = {};
                         }
                         else {
                             inventoryFullTimer = 1.0f;
                         }
                     }
                 }
-            }
 
-            // Первый клик выбирает стопку до следующего клика.
-            if (leftPressed && selectedBeforeClick == -1) {
-                splitSource = -1;
+                if (rightPressed && selectedBeforeClick == -1) {
 
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
+                    bool clickedSlot = false;
 
-                    Rectangle slot = GetInventorySlotRect(i);
-
-                    if (CheckCollisionPointRec(mouse, slot) &&
-                        inventory[i].amount > 0) {
-
-                        selectedSlot = i;
-                        placingFurnace = inventory[i].type == ItemType::Furnace;
-                        placingDrill = inventory[i].type == ItemType::Drill;
-                        placingRoller = inventory[i].type == ItemType::Roller;
-                        break;
-                    }
-                }
-            }
-
-            // Выгрузка предметов из печи по клику.
-            if (openedFurnaceX != -1 &&
-                openedFurnaceY != -1 &&
-                selectedBeforeClick == -1 &&
-                (leftPressed || rightPressed)) {
-                FurnaceStorage& furnace =
-                    furnaces[openedFurnaceY][openedFurnaceX];
-
-                InventorySlot* source = nullptr;
-                if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(0))) {
-                    source = &furnace.ore;
-                }
-                else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(1))) {
-                    source = &furnace.fuel;
-                }
-                else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(2))) {
-                    source = &furnace.output;
-                }
-
-                if (source != nullptr && source->amount > 0) {
-                    int moveCount = source->amount;
-                    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
-                        moveCount = 1;
-                    }
-
-                    int remaining = addToInventory(
-                        inventory, INVENTORY_SIZE, source->type, moveCount
-                    );
-                    source->amount -= moveCount - remaining;
-
-                    if (source->amount == 0) {
-                        source->type = ItemType::Empty;
-                    }
-                    if (remaining > 0) {
-                        inventoryFullTimer = 1.0f;
-                    }
-                }
-            }
-
-            // Следующий ЛКМ переносит стопку между слотами инвентаря.
-            if (leftPressed && selectedBeforeClick != -1) {
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-
-                    Rectangle slot = GetInventorySlotRect(i);
-
-                    if (CheckCollisionPointRec(mouse, slot)) {
-
-                        if (selectedSlot != i) {
-
-                            bool joiningCards =
-                                (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
-                                inventory[selectedSlot].type == ItemType::PunchedCard &&
-                                inventory[i].type == ItemType::PunchedCard;
-
-                            if (joiningCards) {
-                                InventorySlot& source = inventory[selectedSlot];
-                                InventorySlot& target = inventory[i];
-
-                                // Сначала выбранная цепочка, затем та, по которой нажали.
-                                target.cards.insert(
-                                    target.cards.begin(),
-                                    source.cards.begin(),
-                                    source.cards.end()
-                                );
-                                source = {};
-                            }
-                            // Одинаковые предметы объединяем.
-                            else if (inventory[selectedSlot].type == inventory[i].type &&
-                                     inventory[i].type != ItemType::Empty) {
-
-                                int freeSpace =
-                                    GetMaxStack(inventory[i].type) -
-                                    inventory[i].amount;
-
-                                int moveCount = inventory[selectedSlot].amount;
-
-                                if (moveCount > freeSpace) {
-                                    moveCount = freeSpace;
-                                }
-
-                                if (moveCount > 0) {
-                                    inventory[i].amount += moveCount;
-                                    inventory[selectedSlot].amount -= moveCount;
-                                }
-
-                                if (inventory[selectedSlot].amount == 0) {
-                                    inventory[selectedSlot].type = ItemType::Empty;
-                                }
-                            }
-                            else {
-                                // Разные предметы меняем местами
-                                InventorySlot temp = inventory[selectedSlot];
-
-                                inventory[selectedSlot] = inventory[i];
-                                inventory[i] = temp;
-                            }
-                        }
-                        // Клик по исходному слоту отменяет выбор.
-                        placingFurnace = false;
-                        placingDrill = false;
-                        placingRoller = false;
-                        selectedSlot = -1;
-                        break;
-                    }
-                }
-            }
-
-            // Выбранная стопка: ЛКМ кладёт всё, ПКМ — один предмет.
-            if (selectedBeforeClick != -1 &&
-                selectedSlot != -1 &&
-                openedFurnaceX != -1 &&
-                openedFurnaceY != -1 &&
-                (leftPressed || rightPressed)) {
-
-                FurnaceStorage& furnace =
-                    furnaces[openedFurnaceY][openedFurnaceX];
-
-                InventorySlot& source = inventory[selectedSlot];
-                InventorySlot* target = nullptr;
-
-                if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(0)) &&
-                    source.type == ItemType::IronOre) {
-                    target = &furnace.ore;
-                }
-                else if (CheckCollisionPointRec(mouse, GetFurnaceSlotRect(1)) &&
-                         source.type == ItemType::Coal) {
-                    target = &furnace.fuel;
-                }
-
-                if (target != nullptr) {
-                    int moveCount = rightPressed ? 1 : source.amount;
-                    int freeSpace = GetMaxStack(source.type) - target->amount;
-                    if (moveCount > freeSpace) {
-                        moveCount = freeSpace;
-                    }
-
-                    if (moveCount > 0) {
-                        target->type = source.type;
-                        target->amount += moveCount;
-                        source.amount -= moveCount;
-
-                        if (source.amount == 0) {
-                            source.type = ItemType::Empty;
-                            selectedSlot = -1;
-                        }
-                    }
-                }
-            }
-
-            // Установка карты сохраняет её команду и аргумент.
-            if (openedFurnaceX != -1 &&
-                openedFurnaceY != -1 &&
-                leftPressed &&
-                CheckCollisionPointRec(mouse, GetFurnaceReaderRect()) &&
-                selectedBeforeClick != -1 &&
-                selectedSlot != -1) {
-
-                FurnaceStorage& furnace =
-                    furnaces[openedFurnaceY][openedFurnaceX];
-                InventorySlot& source = inventory[selectedSlot];
-                if (source.type == ItemType::PunchedCard &&
-                    furnace.reader.amount == 0) {
-                    furnace.reader = source;
-                    furnace.completedActions = 0;
-                    furnace.cardIndex = 0;
-                    furnace.commandTimer = 0.0f;
-                    source = {};
-                    selectedSlot = -1;
-                }
-            }
-
-            // Для извлечения карты нужен отдельный свободный слот.
-            if (openedFurnaceX != -1 &&
-                openedFurnaceY != -1 &&
-                leftPressed &&
-                selectedBeforeClick == -1 &&
-                CheckCollisionPointRec(mouse, GetFurnaceReaderRect())) {
-
-                FurnaceStorage& furnace =
-                    furnaces[openedFurnaceY][openedFurnaceX];
-                if (furnace.reader.amount > 0) {
-                    int freeSlot = -1;
                     for (int i = 0; i < INVENTORY_SIZE; i++) {
-                        if (inventory[i].amount == 0) {
-                            freeSlot = i;
+
+                        Rectangle slot = GetInventorySlotRect(i);
+
+                        if (CheckCollisionPointRec(mouse, slot)) {
+
+                            clickedSlot = true;
+
+                            // Первый ПКМ — выбираем исходный слот
+                            if (splitSource == -1) {
+
+                                if (inventory[i].amount >= 2) {
+                                    splitSource = i;
+                                }
+                            }
+                            // Второй ПКМ — выбираем место назначения
+                            else {
+
+                                if (i != splitSource &&
+                                    inventory[i].amount == 0) {
+
+                                    int half =
+                                        inventory[splitSource].amount / 2;
+
+                                    inventory[i].type =
+                                        inventory[splitSource].type;
+
+                                    inventory[i].amount = half;
+
+                                    inventory[splitSource].amount -= half;
+                                }
+
+                                splitSource = -1;
+                            }
+
                             break;
                         }
                     }
 
-                    if (freeSlot != -1) {
-                        inventory[freeSlot] = furnace.reader;
-                        furnace.reader = {};
-                    }
-                    else {
-                        inventoryFullTimer = 1.0f;
+                    if (!clickedSlot) {
+                        splitSource = -1;
                     }
                 }
-            }
 
-            if (rightPressed && selectedBeforeClick == -1) {
-                
-                bool clickedSlot = false;
-
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-                    
-                    Rectangle slot = GetInventorySlotRect(i);
-
-                    if (CheckCollisionPointRec(mouse, slot)) {
-                        
-                        clickedSlot = true;
-
-                        // Первый ПКМ — выбираем исходный слот
-                        if (splitSource == -1) {
-
-                            if (inventory[i].amount >= 2) {
-                                splitSource = i;
-                            }
-                        }
-                        // Второй ПКМ — выбираем место назначения
-                        else {
-
-                            if (i != splitSource &&
-                                inventory[i].amount == 0) {
-
-                                int half =
-                                    inventory[splitSource].amount / 2;
-
-                                inventory[i].type =
-                                    inventory[splitSource].type;
-
-                                inventory[i].amount = half;
-
-                                inventory[splitSource].amount -= half;
-                            }
-
-                            splitSource = -1;
-                        }
-
-                        break;
-                    }
-                }
-                
-                if (!clickedSlot) {
-                    splitSource = -1;
-                }
-            }
-            
-        }
-        else {
-            selectedSlot = -1;
-        }
-        
-        // ==========================================
-        // CRAFTING
-        // ==========================================
-        
-        int stoneCount = 0;
-        int woodCount = 0;
-        int plateCount = 0;
-
-        for (int i = 0; i < INVENTORY_SIZE; i++) {
-            if (inventory[i].type == ItemType::Stone) {
-                stoneCount += inventory[i].amount;
-            }
-            else if (inventory[i].type == ItemType::Wood) {
-                woodCount += inventory[i].amount;
-            }
-            else if (inventory[i].type == ItemType::IronPlate) {
-                plateCount += inventory[i].amount;
-            }
-        }
-
-        Rectangle craftButton = {615, 132, 170, 24};
-        Rectangle cardButton = {615, 192, 170, 24};
-        Rectangle drillButton = {615, 252, 170, 24};
-        Rectangle rollerButton = {615, 312, 170, 24};
-
-        struct Ingredient {
-            ItemType type;
-            int amount;
-        };
-        std::vector<Ingredient> ingredients;
-        CraftOrder order = {};
-
-        if (inventoryOpen && !puncherOpen &&
-            IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-            if (CheckCollisionPointRec(mouse, craftButton) && stoneCount >= 3) {
-                ingredients = {{ItemType::Stone, 3}};
-                order = {ItemType::Furnace, 2.0f};
-            }
-            else if (CheckCollisionPointRec(mouse, cardButton) && woodCount >= 1) {
-                ingredients = {{ItemType::Wood, 1}};
-                order = {ItemType::BlankCard, 1.0f};
-            }
-            else if (CheckCollisionPointRec(mouse, drillButton) && plateCount >= 3) {
-                ingredients = {{ItemType::IronPlate, 3}};
-                order = {ItemType::Drill, 3.0f};
-            }
-            else if (CheckCollisionPointRec(mouse, rollerButton) &&
-                     plateCount >= 1 && woodCount >= 1) {
-                ingredients = {{ItemType::IronPlate, 1}, {ItemType::Wood, 1}};
-                order = {ItemType::Roller, 2.0f};
-            }
-        }
-
-        if (!ingredients.empty()) {
-            for (const Ingredient& ingredient : ingredients) {
-                int required = ingredient.amount;
-                for (int i = 0; i < INVENTORY_SIZE && required > 0; i++) {
-                    if (inventory[i].type != ingredient.type) {
-                        continue;
-                    }
-                    int take = inventory[i].amount;
-                    if (take > required) {
-                        take = required;
-                    }
-                    inventory[i].amount -= take;
-                    required -= take;
-                    if (inventory[i].amount == 0) {
-                        inventory[i] = {};
-                        if (selectedSlot == i) selectedSlot = -1;
-                        if (splitSource == i) splitSource = -1;
-                    }
-                }
-            }
-
-            bool wasEmpty = craftQueue.empty();
-            craftQueue.push(order);
-            if (wasEmpty) {
-                craftTimer = order.duration;
-            }
-        }
-
-        // Готовый заказ ждёт места и задерживает следующие заказы.
-        if (!craftQueue.empty()) {
-            if (craftTimer > 0.0f) {
-                craftTimer -= GetFrameTime();
-                if (craftTimer < 0.0f) {
-                    craftTimer = 0.0f;
-                }
-            }
-
-            if (craftTimer == 0.0f) {
-                int remaining = addToInventory(
-                    inventory, INVENTORY_SIZE, craftQueue.front().result, 1
-                );
-                if (remaining == 0) {
-                    craftQueue.pop();
-                    if (!craftQueue.empty()) {
-                        craftTimer = craftQueue.front().duration;
-                    }
-                }
-            }
-        }
-
-        // Проверяем место после крафта: готовый заказ мог занять свободный слот.
-        Rectangle punchButton = {185, 375, 170, 30};
-        bool hasBlank =
-            puncherSlot >= 0 &&
-            inventory[puncherSlot].type == ItemType::BlankCard &&
-            inventory[puncherSlot].amount > 0;
-        int punchedCardSlot = -1;
-
-        if (puncherOpen && hasBlank) {
-            if (inventory[puncherSlot].amount == 1) {
-                punchedCardSlot = puncherSlot;
             }
             else {
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-                    if (inventory[i].amount == 0) {
-                        punchedCardSlot = i;
-                        break;
-                    }
+                selectedSlot = -1;
+            }
+
+            // ==========================================
+            // CRAFTING
+            // ==========================================
+
+            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                if (inventory[i].type == ItemType::Stone) {
+                    stoneCount += inventory[i].amount;
+                }
+                else if (inventory[i].type == ItemType::Wood) {
+                    woodCount += inventory[i].amount;
+                }
+                else if (inventory[i].type == ItemType::IronPlate) {
+                    plateCount += inventory[i].amount;
                 }
             }
-        }
 
-        bool canPunch =
-            puncherOpen && hasBlank && validPattern && punchedCardSlot != -1;
-
-        if (canPunch &&
-            IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-            CheckCollisionPointRec(mouse, punchButton)) {
-            inventory[puncherSlot].amount--;
-            if (inventory[puncherSlot].amount == 0) {
-                inventory[puncherSlot] = {};
-            }
-            inventory[punchedCardSlot] = {
-                ItemType::PunchedCard, 1, {{command, argument}}
+            struct Ingredient {
+                ItemType type;
+                int amount;
             };
-            puncherOpen = false;
-            puncherSlot = -1;
-        }
+            std::vector<Ingredient> ingredients;
+            CraftOrder order = {};
 
-        // Плавка по установленной карте RUN.
-        for (int row = 0; row < ROWS; row++) {
-            for (int col = 0; col < COLS; col++) {
-                if (grid[row][col] != TileType::Furnace) {
-                    continue;
+            if (inventoryOpen && !puncherOpen &&
+                IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                if (CheckCollisionPointRec(mouse, craftButton) && stoneCount >= 3) {
+                    ingredients = {{ItemType::Stone, 3}};
+                    order = {ItemType::Furnace, 2.0f};
                 }
-                FurnaceStorage& furnace = furnaces[row][col];
-                if (furnace.reader.amount == 0) {
-                    furnace.status = "Insert card";
-                    continue;
+                else if (CheckCollisionPointRec(mouse, cardButton) && woodCount >= 1) {
+                    ingredients = {{ItemType::Wood, 1}};
+                    order = {ItemType::BlankCard, 1.0f};
                 }
-                if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
-                    furnace.status = "Done";
-                    continue;
+                else if (CheckCollisionPointRec(mouse, drillButton) && plateCount >= 3) {
+                    ingredients = {{ItemType::IronPlate, 3}};
+                    order = {ItemType::Drill, 3.0f};
                 }
+                else if (CheckCollisionPointRec(mouse, rollerButton) &&
+                         plateCount >= 1 && woodCount >= 1) {
+                    ingredients = {{ItemType::IronPlate, 1}, {ItemType::Wood, 1}};
+                    order = {ItemType::Roller, 2.0f};
+                }
+            }
 
-                const CardInstruction& instruction =
-                    furnace.reader.cards[furnace.cardIndex];
-
-                if (instruction.command == 1 &&
-                    furnace.output.amount >= GetMaxStack(ItemType::IronPlate)) {
-                    furnace.status = "OUTPUT FULL";
-                    continue;
-                }
-
-                bool continuingSmelt = instruction.command == 1 && furnace.smelting;
-                if (!continuingSmelt && furnace.energy == 0) {
-                    if (furnace.fuel.amount == 0) {
-                        furnace.status = "FUEL EXHAUSTED";
-                        continue;
-                    }
-                    furnace.fuel.amount--;
-                    if (furnace.fuel.amount == 0) {
-                        furnace.fuel = {};
-                    }
-                    furnace.energy = 3;
-                }
-
-                if (instruction.command == 2) {
-                    furnace.status = "Reading BACK";
-                    furnace.commandTimer += GetFrameTime();
-                    if (furnace.commandTimer < 0.2f) {
-                        continue;
-                    }
-                    if (instruction.argument > furnace.cardIndex) {
-                        furnace.status = "INVALID BACK";
-                        continue;
-                    }
-                    furnace.cardIndex -= instruction.argument;
-                    furnace.completedActions = 0;
-                    furnace.commandTimer = 0.0f;
-                    continue;
-                }
-
-                if (instruction.command != 1) {
-                    furnace.status = "UNSUPPORTED COMMAND";
-                    continue;
-                }
-
-                if (!furnace.smelting) {
-                    if (furnace.ore.amount == 0) {
-                        furnace.status = "NO ORE";
-                        continue;
-                    }
-                    furnace.ore.amount--;
-                    if (furnace.ore.amount == 0) {
-                        furnace.ore = {};
-                    }
-                    furnace.energy--;
-                    furnace.smelting = true;
-                    furnace.smeltTimer = 3.0f;
-                }
-
-                furnace.status = "Smelting";
-                furnace.smeltTimer -= GetFrameTime();
-                if (furnace.smeltTimer <= 0.0f) {
-                    furnace.output.type = ItemType::IronPlate;
-                    furnace.output.amount++;
-                    furnace.smelting = false;
-                    furnace.smeltTimer = 0.0f;
-                    furnace.completedActions++;
-                    if (furnace.completedActions >= instruction.argument) {
-                        furnace.cardIndex++;
-                        furnace.commandTimer = 0.0f;
-                        if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
-                            furnace.status = "Done";
+            if (!ingredients.empty()) {
+                for (const Ingredient& ingredient : ingredients) {
+                    int required = ingredient.amount;
+                    for (int i = 0; i < INVENTORY_SIZE && required > 0; i++) {
+                        if (inventory[i].type != ingredient.type) {
+                            continue;
                         }
-                        else {
-                            furnace.completedActions = 0;
-                            furnace.status = "Next card";
+                        int take = inventory[i].amount;
+                        if (take > required) {
+                            take = required;
+                        }
+                        inventory[i].amount -= take;
+                        required -= take;
+                        if (inventory[i].amount == 0) {
+                            inventory[i] = {};
+                            if (selectedSlot == i) selectedSlot = -1;
+                            if (splitSource == i) splitSource = -1;
+                        }
+                    }
+                }
+
+                bool wasEmpty = craftQueue.empty();
+                craftQueue.push(order);
+                if (wasEmpty) {
+                    craftTimer = order.duration;
+                }
+            }
+
+            // Готовый заказ ждёт места и задерживает следующие заказы.
+            if (!craftQueue.empty()) {
+                if (craftTimer > 0.0f) {
+                    craftTimer -= GetFrameTime();
+                    if (craftTimer < 0.0f) {
+                        craftTimer = 0.0f;
+                    }
+                }
+
+                if (craftTimer == 0.0f) {
+                    int remaining = addToInventory(
+                        inventory, INVENTORY_SIZE, craftQueue.front().result, 1
+                    );
+                    if (remaining == 0) {
+                        craftQueue.pop();
+                        if (!craftQueue.empty()) {
+                            craftTimer = craftQueue.front().duration;
                         }
                     }
                 }
             }
-        }
 
-        // Добыча по установленной карте RUN.
-        for (int row = 0; row < ROWS; row++) {
-            for (int col = 0; col < COLS; col++) {
-                if (grid[row][col] != TileType::Drill) {
-                    continue;
+            // Проверяем место после крафта: готовый заказ мог занять свободный слот.
+            hasBlank =
+                puncherSlot >= 0 &&
+                inventory[puncherSlot].type == ItemType::BlankCard &&
+                inventory[puncherSlot].amount > 0;
+
+            if (puncherOpen && hasBlank) {
+                if (inventory[puncherSlot].amount == 1) {
+                    punchedCardSlot = puncherSlot;
                 }
-
-                DrillStorage& drill = drills[row][col];
-
-                if (drill.reader.amount == 0) {
-                    drill.status = "Insert card";
-                    continue;
+                else {
+                    for (int i = 0; i < INVENTORY_SIZE; i++) {
+                        if (inventory[i].amount == 0) {
+                            punchedCardSlot = i;
+                            break;
+                        }
+                    }
                 }
+            }
 
-                if (drill.cardIndex >= (int)drill.reader.cards.size()) {
-                    drill.status = "Done";
-                    continue;
+            canPunch =
+                puncherOpen && hasBlank && validPattern && punchedCardSlot != -1;
+
+            if (canPunch &&
+                IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                CheckCollisionPointRec(mouse, punchButton)) {
+                inventory[puncherSlot].amount--;
+                if (inventory[puncherSlot].amount == 0) {
+                    inventory[puncherSlot] = {};
                 }
+                inventory[punchedCardSlot] = {
+                    ItemType::PunchedCard, 1, {{command, argument}}
+                };
+                puncherOpen = false;
+                puncherSlot = -1;
+            }
 
-                const CardInstruction& instruction =
-                    drill.reader.cards[drill.cardIndex];
-
-                bool isIron = drillDeposits[row][col] == TileType::IronOre;
-                ItemType resource = isIron ? ItemType::IronOre : ItemType::Coal;
-
-                if (instruction.command == 1) {
-                    if (resourceAmount[row][col] == 0) {
-                        drill.status = "DEPOSIT DEPLETED";
+            // Плавка по установленной карте RUN.
+            for (int row = 0; row < ROWS; row++) {
+                for (int col = 0; col < COLS; col++) {
+                    if (grid[row][col] != TileType::Furnace) {
                         continue;
                     }
-                    if (drill.output.amount >= GetMaxStack(resource)) {
-                        drill.status = "OUTPUT FULL";
+                    FurnaceStorage& furnace = furnaces[row][col];
+                    if (furnace.reader.amount == 0) {
+                        furnace.status = "Insert card";
                         continue;
                     }
-                }
-
-                if (drill.energy == 0) {
-                    if (drill.fuel.amount == 0) {
-                        drill.status = "FUEL EXHAUSTED";
-                        continue;
-                    }
-
-                    drill.fuel.amount--;
-                    if (drill.fuel.amount == 0) {
-                        drill.fuel = {};
-                    }
-                    drill.energy = 3;
-                }
-
-                if (instruction.command == 2) {
-                    drill.status = "Reading BACK";
-                    drill.commandTimer += GetFrameTime();
-
-                    if (drill.commandTimer < 0.2f) {
+                    if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
+                        furnace.status = "Done";
                         continue;
                     }
 
-                    if (instruction.argument > drill.cardIndex) {
-                        drill.status = "INVALID BACK";
+                    const CardInstruction& instruction =
+                        furnace.reader.cards[furnace.cardIndex];
+
+                    if (instruction.command == 1 &&
+                        furnace.output.amount >= GetMaxStack(ItemType::IronPlate)) {
+                        furnace.status = "OUTPUT FULL";
                         continue;
                     }
 
-                    drill.cardIndex -= instruction.argument;
-                    drill.completedActions = 0;
-                    drill.commandTimer = 0.0f;
-                    continue;
-                }
+                    bool continuingSmelt = instruction.command == 1 && furnace.smelting;
+                    if (!continuingSmelt && furnace.energy == 0) {
+                        if (furnace.fuel.amount == 0) {
+                            furnace.status = "FUEL EXHAUSTED";
+                            continue;
+                        }
+                        furnace.fuel.amount--;
+                        if (furnace.fuel.amount == 0) {
+                            furnace.fuel = {};
+                        }
+                        furnace.energy = 3;
+                    }
 
-                if (instruction.command != 1) {
-                    drill.status = "UNSUPPORTED COMMAND";
-                    continue;
-                }
+                    if (instruction.command == 2) {
+                        furnace.status = "Reading BACK";
+                        furnace.commandTimer += GetFrameTime();
+                        if (furnace.commandTimer < 0.2f) {
+                            continue;
+                        }
+                        if (instruction.argument > furnace.cardIndex) {
+                            furnace.status = "INVALID BACK";
+                            continue;
+                        }
+                        furnace.cardIndex -= instruction.argument;
+                        furnace.completedActions = 0;
+                        furnace.commandTimer = 0.0f;
+                        continue;
+                    }
 
-                drill.status = "Mining";
-                drill.hitTimer += GetFrameTime();
+                    if (instruction.command != 1) {
+                        furnace.status = "UNSUPPORTED COMMAND";
+                        continue;
+                    }
 
-                if (drill.hitTimer < 0.4f) {
-                    continue;
-                }
+                    if (!furnace.smelting) {
+                        if (furnace.ore.amount == 0) {
+                            furnace.status = "NO ORE";
+                            continue;
+                        }
+                        furnace.ore.amount--;
+                        if (furnace.ore.amount == 0) {
+                            furnace.ore = {};
+                        }
+                        furnace.energy--;
+                        furnace.smelting = true;
+                        furnace.smeltTimer = 3.0f;
+                    }
 
-                drill.hitTimer = 0.0f;
-                drill.energy--;
-                drill.completedActions++;
-                durability[row][col]--;
-
-                if (durability[row][col] <= 0) {
-                    drill.output.type = resource;
-                    drill.output.amount++;
-                    resourceAmount[row][col]--;
-
-                    if (resourceAmount[row][col] > 0) {
-                        durability[row][col] = isIron ? 3 : 2;
+                    furnace.status = "Smelting";
+                    furnace.smeltTimer -= GetFrameTime();
+                    if (furnace.smeltTimer <= 0.0f) {
+                        furnace.output.type = ItemType::IronPlate;
+                        furnace.output.amount++;
+                        furnace.smelting = false;
+                        furnace.smeltTimer = 0.0f;
+                        furnace.completedActions++;
+                        if (furnace.completedActions >= instruction.argument) {
+                            furnace.cardIndex++;
+                            furnace.commandTimer = 0.0f;
+                            if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
+                                furnace.status = "Done";
+                            }
+                            else {
+                                furnace.completedActions = 0;
+                                furnace.status = "Next card";
+                            }
+                        }
                     }
                 }
+            }
 
-                if (drill.completedActions >= instruction.argument) {
-                    drill.cardIndex++;
-                    drill.commandTimer = 0.0f;
+            // Добыча по установленной карте RUN.
+            for (int row = 0; row < ROWS; row++) {
+                for (int col = 0; col < COLS; col++) {
+                    if (grid[row][col] != TileType::Drill) {
+                        continue;
+                    }
+
+                    DrillStorage& drill = drills[row][col];
+
+                    if (drill.reader.amount == 0) {
+                        drill.status = "Insert card";
+                        continue;
+                    }
 
                     if (drill.cardIndex >= (int)drill.reader.cards.size()) {
                         drill.status = "Done";
+                        continue;
                     }
-                    else {
+
+                    const CardInstruction& instruction =
+                        drill.reader.cards[drill.cardIndex];
+
+                    bool isIron = drillDeposits[row][col] == TileType::IronOre;
+                    ItemType resource = isIron ? ItemType::IronOre : ItemType::Coal;
+
+                    if (instruction.command == 1) {
+                        if (resourceAmount[row][col] == 0) {
+                            drill.status = "DEPOSIT DEPLETED";
+                            continue;
+                        }
+                        if (drill.output.amount >= GetMaxStack(resource)) {
+                            drill.status = "OUTPUT FULL";
+                            continue;
+                        }
+                    }
+
+                    if (drill.energy == 0) {
+                        if (drill.fuel.amount == 0) {
+                            drill.status = "FUEL EXHAUSTED";
+                            continue;
+                        }
+
+                        drill.fuel.amount--;
+                        if (drill.fuel.amount == 0) {
+                            drill.fuel = {};
+                        }
+                        drill.energy = 3;
+                    }
+
+                    if (instruction.command == 2) {
+                        drill.status = "Reading BACK";
+                        drill.commandTimer += GetFrameTime();
+
+                        if (drill.commandTimer < 0.2f) {
+                            continue;
+                        }
+
+                        if (instruction.argument > drill.cardIndex) {
+                            drill.status = "INVALID BACK";
+                            continue;
+                        }
+
+                        drill.cardIndex -= instruction.argument;
                         drill.completedActions = 0;
-                        drill.status = "Next card";
+                        drill.commandTimer = 0.0f;
+                        continue;
+                    }
+
+                    if (instruction.command != 1) {
+                        drill.status = "UNSUPPORTED COMMAND";
+                        continue;
+                    }
+
+                    drill.status = "Mining";
+                    drill.hitTimer += GetFrameTime();
+
+                    if (drill.hitTimer < 0.4f) {
+                        continue;
+                    }
+
+                    drill.hitTimer = 0.0f;
+                    drill.energy--;
+                    drill.completedActions++;
+                    durability[row][col]--;
+
+                    if (durability[row][col] <= 0) {
+                        drill.output.type = resource;
+                        drill.output.amount++;
+                        resourceAmount[row][col]--;
+
+                        if (resourceAmount[row][col] > 0) {
+                            durability[row][col] = isIron ? 3 : 2;
+                        }
+                    }
+
+                    if (drill.completedActions >= instruction.argument) {
+                        drill.cardIndex++;
+                        drill.commandTimer = 0.0f;
+
+                        if (drill.cardIndex >= (int)drill.reader.cards.size()) {
+                            drill.status = "Done";
+                        }
+                        else {
+                            drill.completedActions = 0;
+                            drill.status = "Next card";
+                        }
+                    }
+                    else if (resourceAmount[row][col] == 0) {
+                        drill.status = "DEPOSIT DEPLETED";
+                    }
+                    else if (drill.energy == 0 && drill.fuel.amount == 0) {
+                        drill.status = "FUEL EXHAUSTED";
                     }
                 }
-                else if (resourceAmount[row][col] == 0) {
-                    drill.status = "DEPOSIT DEPLETED";
-                }
-                else if (drill.energy == 0 && drill.fuel.amount == 0) {
-                    drill.status = "FUEL EXHAUSTED";
+            }
+
+            if (choosingControllerX != -1 && choosingControllerY != -1 &&
+                !directionSelectionStartedThisFrame) {
+                auto choices = getDirectionChoices(
+                    choosingControllerX, choosingControllerY
+                );
+                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                    for (const RollerDirectionChoice& choice : choices) {
+                        if (!CheckCollisionPointRec(mouse, choice.hitbox)) {
+                            continue;
+                        }
+                        auto route = getDirectedLine(choice.start);
+                        for (const RollerStep& step : route) {
+                            if (step.cell.x != choosingControllerX ||
+                                step.cell.y != choosingControllerY) {
+                                continue;
+                            }
+                            int shape = rollerShapes[choosingControllerY][choosingControllerX];
+                            rollerEntrySides[choosingControllerY][choosingControllerX] =
+                                OtherRollerSide(shape, step.exitSide);
+                            rollerDirectionSet[choosingControllerY][choosingControllerX] = true;
+                            break;
+                        }
+                        choosingControllerX = -1;
+                        choosingControllerY = -1;
+                        break;
+                    }
                 }
             }
         }
@@ -1758,7 +2307,32 @@ int main() {
 
                 TileType tile = grid[row][col];
                 if (tile == TileType::Roller) {
-                    DrawRollerTile(col * TILE_SIZE, row * TILE_SIZE, DARKGRAY);
+                    DrawRollerTile(
+                        col * TILE_SIZE, row * TILE_SIZE,
+                        rollerShapes[row][col], DARKGRAY
+                    );
+                    int tileX = col * TILE_SIZE;
+                    int tileY = row * TILE_SIZE;
+
+                    if (isRollerConnected(col, row, RollerSide::Left)) {
+                        DrawRectangle(tileX + 1, tileY + 8, 3, 4, GREEN);
+                    }
+                    if (isRollerConnected(col, row, RollerSide::Right)) {
+                        DrawRectangle(tileX + TILE_SIZE - 4, tileY + 8, 3, 4, GREEN);
+                    }
+                    if (isRollerConnected(col, row, RollerSide::Up)) {
+                        DrawRectangle(tileX + 8, tileY + 1, 4, 3, GREEN);
+                    }
+                    if (isRollerConnected(col, row, RollerSide::Down)) {
+                        DrawRectangle(tileX + 8, tileY + TILE_SIZE - 4, 4, 3, GREEN);
+                    }
+                    if (rollerControllers[row][col]) {
+                        DrawRectangleLines(
+                            tileX + 1, tileY + 1,
+                            TILE_SIZE - 2, TILE_SIZE - 2,
+                            GOLD
+                        );
+                    }
                     continue;
                 }
 
@@ -1855,6 +2429,77 @@ int main() {
             DrawLine(0, y, 800, y, LIGHTGRAY);
         }
 
+        if (!inventoryOpen && !directionInputBlocked && !developerPanelOpen &&
+            insideMap &&
+            grid[cellY][cellX] == TileType::Roller &&
+            rollerControllers[cellY][cellX]) {
+            RollerLine line = getRollerLine(cellX, cellY);
+
+            for (const RollerCell& cell : line.cells) {
+                DrawRectangle(
+                    cell.x * TILE_SIZE + 2,
+                    cell.y * TILE_SIZE + 2,
+                    TILE_SIZE - 4,
+                    TILE_SIZE - 4,
+                    Fade(SKYBLUE, 0.35f)
+                );
+            }
+
+            for (const RollerEnd& end : line.ends) {
+                int edgeX = end.cell.x * TILE_SIZE + TILE_SIZE / 2;
+                int edgeY = end.cell.y * TILE_SIZE + TILE_SIZE / 2;
+
+                switch (end.side) {
+                    case RollerSide::Left:
+                        edgeX = end.cell.x * TILE_SIZE + 2;
+                        break;
+                    case RollerSide::Right:
+                        edgeX = (end.cell.x + 1) * TILE_SIZE - 3;
+                        break;
+                    case RollerSide::Up:
+                        edgeY = end.cell.y * TILE_SIZE + 2;
+                        break;
+                    case RollerSide::Down:
+                        edgeY = (end.cell.y + 1) * TILE_SIZE - 3;
+                        break;
+                }
+
+                DrawCircle(edgeX, edgeY, 3, ORANGE);
+            }
+
+            DrawText(
+                TextFormat(
+                    "Line: %i rollers | %i ends",
+                    (int)line.cells.size(),
+                    (int)line.ends.size()
+                ),
+                10, 90, 18, DARKBLUE
+            );
+        }
+
+        for (int row = 0; row < ROWS; row++) {
+            for (int col = 0; col < COLS; col++) {
+                if (grid[row][col] != TileType::Roller ||
+                    !rollerControllers[row][col] ||
+                    !rollerDirectionSet[row][col]) {
+                    continue;
+                }
+                RollerLine line = getRollerLine(col, row);
+                int controllerCount = 0;
+                for (const RollerCell& cell : line.cells) {
+                    if (rollerControllers[cell.y][cell.x]) {
+                        controllerCount++;
+                    }
+                }
+                if (controllerCount != 1) {
+                    continue;
+                }
+                for (const RollerStep& step : getControllerRoute(col, row)) {
+                    DrawRollerArrow(step.cell, step.exitSide, TILE_SIZE);
+                }
+            }
+        }
+
         if (dismantleX != -1 && dismantleTimer > 0.0f) {
             int barX = dismantleX * TILE_SIZE;
             int barY = dismantleY * TILE_SIZE - 8;
@@ -1910,12 +2555,13 @@ int main() {
         // RENDER — Предпросмотр строительства
         // ==========================================
 
-        if (insideMap && !inventoryOpen &&
+        if (!developerPanelOpen && insideMap && !inventoryOpen && !directionInputBlocked &&
             (placingFurnace || placingDrill || placingRoller || selectedTile != TileType::Empty)) {
 
             if (placingRoller) {
                 DrawRollerTile(
                     cellX * TILE_SIZE, cellY * TILE_SIZE,
+                    selectedRollerShape,
                     canBuild ? GREEN : RED
                 );
             }
@@ -1988,7 +2634,7 @@ int main() {
             selectedName = "Drill";
         }
         else if (placingRoller) {
-            selectedName = "Roller";
+            selectedName = "Roller (R)";
         }
 
         // Рисуем интерфейс поверх игрового мира
@@ -2003,6 +2649,39 @@ int main() {
             DrawRectangle(200, 60, 400, 330, DARKGRAY);
 
             DrawText("Inventory", 220, 75, 30, WHITE);
+
+            if (openedRollerX != -1 && openedRollerY != -1) {
+                bool isController =
+                    rollerControllers[openedRollerY][openedRollerX];
+                DrawRectangle(10, 60, 180, 350, DARKGRAY);
+                DrawText("Roller", 25, 75, 24, WHITE);
+                if (isController) {
+                    DrawText("Controller", 25, 110, 20, GOLD);
+                    const InventorySlot& fuel =
+                        rollerFuel[openedRollerY][openedRollerX];
+                    DrawText("1. Coal", 25, 190, 18, WHITE);
+                    DrawRectangleRec(rollerFuelRect, GRAY);
+                    DrawRectangleLinesEx(rollerFuelRect, 1, WHITE);
+                    if (fuel.amount > 0) {
+                        DrawRectangle(42, 232, 26, 26, BLACK);
+                    }
+                    DrawText(
+                        TextFormat("%i / 200", fuel.amount),
+                        25, 285, 18, WHITE
+                    );
+                }
+                else {
+                    DrawText("Regular roller", 25, 110, 16, LIGHTGRAY);
+                }
+                if (!rollerDirectionSet[openedRollerY][openedRollerX]) {
+                    DrawRectangleRec(controllerButton, GREEN);
+                    DrawText(
+                        isController ? "Set direction" : "Set controller",
+                        32, 142, 18, WHITE
+                    );
+                }
+                DrawText("E: Close", 25, 380, 18, LIGHTGRAY);
+            }
 
             if (openedFurnaceX != -1 && openedFurnaceY != -1) {
                 DrawRectangle(10, 60, 180, 350, DARKGRAY);
@@ -2761,6 +3440,50 @@ int main() {
             DrawRectangleRec(punchButton, canPunch ? GREEN : GRAY);
             DrawText("Punch", 235, 381, 18, WHITE);
             DrawText("E: Close", 185, 415, 18, LIGHTGRAY);
+        }
+
+        if (!developerPanelOpen && choosingControllerX != -1) {
+            auto choices = getDirectionChoices(
+                choosingControllerX, choosingControllerY
+            );
+            for (const RollerDirectionChoice& choice : choices) {
+                DrawRectangleLinesEx(choice.hitbox, 2, ORANGE);
+            }
+            DrawText(
+                "Choose direction: click a marker | E: Cancel",
+                10, 90, 18, DARKBLUE
+            );
+        }
+
+        if (developerPanelOpen) {
+            DrawRectangle(
+                0, 0, GetScreenWidth(), GetScreenHeight(),
+                Fade(BLACK, 0.55f)
+            );
+            DrawRectangle(125, 55, 550, 340, DARKGRAY);
+            DrawRectangleLines(125, 55, 550, 340, GOLD);
+            DrawText("Developer Panel", 145, 70, 26, WHITE);
+            DrawText("PAUSED | F1: Close", 145, 102, 16, GOLD);
+
+            for (int i = 0; i < 9; i++) {
+                Rectangle button = GetDeveloperButtonRect(i);
+                bool hovered = CheckCollisionPointRec(mouse, button);
+                DrawRectangleRec(button, hovered ? GRAY : DARKBLUE);
+                DrawRectangleLinesEx(button, 1, LIGHTGRAY);
+                DrawText(
+                    developerItems[i].name,
+                    (int)button.x + 10, (int)button.y + 10,
+                    18, WHITE
+                );
+                DrawText(
+                    "+10", (int)button.x + 10, (int)button.y + 35,
+                    18, GOLD
+                );
+            }
+
+            if (inventoryFullTimer > 0.0f) {
+                DrawText("INVENTORY FULL", 145, 365, 20, RED);
+            }
         }
 
         EndDrawing();
