@@ -359,8 +359,19 @@ int main() {
     int rollerShapes[ROWS][COLS] = {};
     bool rollerControllers[ROWS][COLS] = {};
     InventorySlot rollerFuel[ROWS][COLS] = {};
+    InventorySlot rollerReaders[ROWS][COLS] = {};
+    InventorySlot rollerCargo[ROWS][COLS] = {};
+    struct RollerProgram {
+        int energy = 0;
+        int completedActions = 0;
+        int cardIndex = 0;
+        float commandTimer = 0.0f;
+        const char* status = "Insert card";
+    };
+    RollerProgram rollerPrograms[ROWS][COLS] = {};
     bool rollerDirectionSet[ROWS][COLS] = {};
     RollerSide rollerEntrySides[ROWS][COLS] = {};
+    int rollerEndSlots[ROWS][COLS][4] = {};
     auto isRollerConnected = [&](int col, int row, RollerSide side) {
         if (col < 0 || col >= COLS || row < 0 || row >= ROWS) {
             return false;
@@ -588,6 +599,108 @@ int main() {
     };
 
     DrillStorage drills[ROWS][COLS] = {};
+
+    auto getBuildingSlotCount = [&](RollerCell cell) {
+        if (cell.x < 0 || cell.x >= COLS ||
+            cell.y < 0 || cell.y >= ROWS) {
+            return 0;
+        }
+
+        if (grid[cell.y][cell.x] == TileType::Furnace) {
+            return 3;
+        }
+        if (grid[cell.y][cell.x] == TileType::Drill) {
+            return 2;
+        }
+
+        return 0;
+    };
+
+    auto getBuildingSlot = [&](RollerCell cell, int slot) -> InventorySlot* {
+        if (cell.x < 0 || cell.x >= COLS ||
+            cell.y < 0 || cell.y >= ROWS) {
+            return nullptr;
+        }
+
+        if (grid[cell.y][cell.x] == TileType::Furnace) {
+            FurnaceStorage& furnace = furnaces[cell.y][cell.x];
+            if (slot == 1) return &furnace.ore;
+            if (slot == 2) return &furnace.fuel;
+            if (slot == 3) return &furnace.output;
+        }
+        else if (grid[cell.y][cell.x] == TileType::Drill) {
+            DrillStorage& drill = drills[cell.y][cell.x];
+            if (slot == 1) return &drill.fuel;
+            if (slot == 2) return &drill.output;
+        }
+
+        return nullptr;
+    };
+
+    auto getAcceptedItem = [&](RollerCell cell, int slot) {
+        if (grid[cell.y][cell.x] == TileType::Furnace) {
+            if (slot == 1) return ItemType::IronOre;
+            if (slot == 2) return ItemType::Coal;
+            if (slot == 3) return ItemType::IronPlate;
+        }
+        else if (grid[cell.y][cell.x] == TileType::Drill) {
+            if (slot == 1) return ItemType::Coal;
+            if (slot == 2) {
+                return drillDeposits[cell.y][cell.x] == TileType::IronOre
+                    ? ItemType::IronOre : ItemType::Coal;
+            }
+        }
+
+        return ItemType::Empty;
+    };
+
+    auto unloadRollerCargo = [&](RollerEnd end) {
+        InventorySlot& cargo = rollerCargo[end.cell.y][end.cell.x];
+        if (cargo.amount == 0) {
+            return false;
+        }
+
+        int slotNumber = rollerEndSlots[end.cell.y][end.cell.x]
+                                        [static_cast<int>(end.side)];
+        RollerCell building = NeighborCell(end.cell, end.side);
+        InventorySlot* target = getBuildingSlot(building, slotNumber);
+
+        if (target == nullptr ||
+            getAcceptedItem(building, slotNumber) != cargo.type ||
+            (target->amount > 0 && target->type != cargo.type) ||
+            target->amount >= GetMaxStack(cargo.type)) {
+            return false;
+        }
+
+        target->type = cargo.type;
+        target->amount++;
+        cargo = {};
+        return true;
+    };
+
+    auto loadRollerCargo = [&](RollerEnd end) {
+        InventorySlot& cargo = rollerCargo[end.cell.y][end.cell.x];
+        if (cargo.amount > 0) {
+            return false;
+        }
+
+        int slotNumber = rollerEndSlots[end.cell.y][end.cell.x]
+                                        [static_cast<int>(end.side)];
+        RollerCell building = NeighborCell(end.cell, end.side);
+        InventorySlot* source = getBuildingSlot(building, slotNumber);
+
+        if (source == nullptr || source->amount == 0) {
+            return false;
+        }
+
+        cargo.type = source->type;
+        cargo.amount = 1;
+        source->amount--;
+        if (source->amount == 0) {
+            *source = {};
+        }
+        return true;
+    };
     
     grid[10][15] = TileType::IronOre;
     grid[10][16] = TileType::IronOre;
@@ -688,6 +801,7 @@ int main() {
         Rectangle punchButton = {185, 375, 170, 30};
         Rectangle controllerButton = {25, 130, 150, 40};
         Rectangle rollerFuelRect = {25, 215, 60, 60};
+        Rectangle rollerReaderRect = {25, 330, 150, 35};
         int punchedCardSlot = -1;
         bool validPattern = false;
         bool hasBlank = false;
@@ -942,6 +1056,12 @@ int main() {
                         rollerDirectionSet[cellY][cellX] = false;
                         rollerPlacedThisFrame = true;
                         rollerFuel[cellY][cellX] = {};
+                        rollerReaders[cellY][cellX] = {};
+                        rollerCargo[cellY][cellX] = {};
+                        rollerPrograms[cellY][cellX] = {};
+                        for (int side = 0; side < 4; side++) {
+                            rollerEndSlots[cellY][cellX][side] = 0;
+                        }
                         inventory[i].amount--;
                         if (inventory[i].amount == 0) {
                             inventory[i] = {};
@@ -1023,11 +1143,33 @@ int main() {
                             candidate, INVENTORY_SIZE, ItemType::Coal,
                             rollerFuel[cellY][cellX].amount
                         );
-                        if (rollerLeft == 0 && coalLeft == 0) {
+                        int cargoLeft = addToInventory(
+                            candidate, INVENTORY_SIZE,
+                            rollerCargo[cellY][cellX].type,
+                            rollerCargo[cellY][cellX].amount
+                        );
+                        const InventorySlot& reader = rollerReaders[cellY][cellX];
+                        bool cardsFit = reader.amount == 0;
+                        if (!cardsFit) {
+                            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                                if (candidate[i].amount == 0) {
+                                    candidate[i] = reader;
+                                    cardsFit = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (rollerLeft == 0 && coalLeft == 0 && cargoLeft == 0 && cardsFit) {
                             for (int i = 0; i < INVENTORY_SIZE; i++) {
                                 inventory[i] = candidate[i];
                             }
                             rollerFuel[cellY][cellX] = {};
+                            rollerReaders[cellY][cellX] = {};
+                            rollerCargo[cellY][cellX] = {};
+                            rollerPrograms[cellY][cellX] = {};
+                            for (int side = 0; side < 4; side++) {
+                                rollerEndSlots[cellY][cellX][side] = 0;
+                            }
                             grid[cellY][cellX] = TileType::Empty;
                             rollerShapes[cellY][cellX] = 0;
                             rollerControllers[cellY][cellX] = false;
@@ -1532,6 +1674,46 @@ int main() {
                             fuel = {};
                         }
                         if (remaining > 0) {
+                            inventoryFullTimer = 1.0f;
+                        }
+                    }
+                }
+
+                if (openedRollerX != -1 && openedRollerY != -1 &&
+                    !rollerOpenedThisFrame &&
+                    rollerControllers[openedRollerY][openedRollerX] &&
+                    leftPressed &&
+                    CheckCollisionPointRec(mouse, rollerReaderRect)) {
+                    InventorySlot& reader =
+                        rollerReaders[openedRollerY][openedRollerX];
+                    if (selectedBeforeClick != -1) {
+                        InventorySlot& source = inventory[selectedBeforeClick];
+                        if (source.type == ItemType::PunchedCard &&
+                            reader.amount == 0) {
+                            reader = source;
+                            RollerProgram& program =
+                                rollerPrograms[openedRollerY][openedRollerX];
+                            program.completedActions = 0;
+                            program.cardIndex = 0;
+                            program.commandTimer = 0.0f;
+                            program.status = "Insert card";
+                            source = {};
+                            selectedSlot = -1;
+                        }
+                    }
+                    else if (reader.amount > 0) {
+                        int freeSlot = -1;
+                        for (int i = 0; i < INVENTORY_SIZE; i++) {
+                            if (inventory[i].amount == 0) {
+                                freeSlot = i;
+                                break;
+                            }
+                        }
+                        if (freeSlot != -1) {
+                            inventory[freeSlot] = reader;
+                            reader = {};
+                        }
+                        else {
                             inventoryFullTimer = 1.0f;
                         }
                     }
@@ -2268,6 +2450,249 @@ int main() {
                 }
             }
 
+            // Исполнение программы роликовой линии.
+            for (int row = 0; row < ROWS; row++) {
+                for (int col = 0; col < COLS; col++) {
+                    if (grid[row][col] != TileType::Roller ||
+                        !rollerControllers[row][col]) {
+                        continue;
+                    }
+                    RollerProgram& program = rollerPrograms[row][col];
+                    const InventorySlot& reader = rollerReaders[row][col];
+                    InventorySlot& fuel = rollerFuel[row][col];
+                    if (!rollerDirectionSet[row][col]) {
+                        program.status = "Set direction";
+                        continue;
+                    }
+                    RollerLine line = getRollerLine(col, row);
+                    int controllerCount = 0;
+                    for (const RollerCell& cell : line.cells) {
+                        if (rollerControllers[cell.y][cell.x]) {
+                            controllerCount++;
+                        }
+                    }
+                    if (controllerCount > 1) {
+                        program.status = "CONFLICT";
+                        continue;
+                    }
+                    if (reader.amount == 0) {
+                        program.status = "Insert card";
+                        continue;
+                    }
+                    if (program.cardIndex >= (int)reader.cards.size()) {
+                        program.status = "Done";
+                        continue;
+                    }
+                    const CardInstruction& instruction =
+                        reader.cards[program.cardIndex];
+                    if (instruction.command == 1) {
+                        if (line.ends.empty()) {
+                            program.status = "COMMAND PENDING";
+                            continue;
+                        }
+
+                        auto route = getControllerRoute(col, row);
+                        if (route.empty()) {
+                            program.status = "LINE BROKEN";
+                            continue;
+                        }
+
+                        RollerCell firstCell = route.front().cell;
+                        RollerEnd sourceEnd = {
+                            firstCell,
+                            OtherRollerSide(
+                                rollerShapes[firstCell.y][firstCell.x],
+                                route.front().exitSide
+                            )
+                        };
+                        RollerEnd targetEnd = {
+                            route.back().cell,
+                            route.back().exitSide
+                        };
+
+                        bool connectionError = false;
+                        const RollerEnd ends[] = {sourceEnd, targetEnd};
+
+                        for (const RollerEnd& end : ends) {
+                            int slotNumber =
+                                rollerEndSlots[end.cell.y][end.cell.x]
+                                              [static_cast<int>(end.side)];
+                            if (slotNumber == 0) {
+                                program.status = "SLOT NOT SET";
+                                connectionError = true;
+                                break;
+                            }
+
+                            RollerCell building = NeighborCell(
+                                end.cell, end.side
+                            );
+                            int slotCount = getBuildingSlotCount(building);
+                            if (slotCount == 0) {
+                                program.status = "NO BUILDING CONNECTED";
+                                connectionError = true;
+                                break;
+                            }
+                            if (slotNumber > slotCount) {
+                                program.status = "INVALID SLOT";
+                                connectionError = true;
+                                break;
+                            }
+                        }
+
+                        if (connectionError) {
+                            continue;
+                        }
+
+                        if (program.energy == 0) {
+                            if (fuel.amount == 0) {
+                                program.status = "FUEL EXHAUSTED";
+                                continue;
+                            }
+                            fuel.amount--;
+                            if (fuel.amount == 0) {
+                                fuel = {};
+                            }
+                            program.energy = 20;
+                        }
+
+                        program.status = "Running";
+                        program.commandTimer += GetFrameTime();
+                        if (program.commandTimer < 0.5f) {
+                            continue;
+                        }
+
+                        bool moved = false;
+
+                        if (unloadRollerCargo(targetEnd)) {
+                            moved = true;
+                        }
+
+                        for (int i = (int)route.size() - 1; i > 0; i--) {
+                            RollerCell from = route[i - 1].cell;
+                            RollerCell to = route[i].cell;
+
+                            if (rollerCargo[to.y][to.x].amount == 0 &&
+                                rollerCargo[from.y][from.x].amount > 0) {
+                                rollerCargo[to.y][to.x] =
+                                    rollerCargo[from.y][from.x];
+                                rollerCargo[from.y][from.x] = {};
+                                moved = true;
+                            }
+                        }
+
+                        if (loadRollerCargo(sourceEnd)) {
+                            moved = true;
+                        }
+
+                        if (!moved) {
+                            program.status = "WAITING FOR MOVEMENT";
+                            continue;
+                        }
+
+                        program.energy--;
+                        program.completedActions++;
+                        program.commandTimer = 0.0f;
+
+                        if (program.completedActions >= instruction.argument) {
+                            program.cardIndex++;
+                            program.completedActions = 0;
+                            program.status =
+                                program.cardIndex >= (int)reader.cards.size()
+                                ? "Done" : "Next card";
+                        }
+                        continue;
+                    }
+                    if (program.energy == 0) {
+                        if (fuel.amount == 0) {
+                            program.status = "FUEL EXHAUSTED";
+                            continue;
+                        }
+                        fuel.amount--;
+                        if (fuel.amount == 0) {
+                            fuel = {};
+                        }
+                        program.energy = 20;
+                    }
+                    if (instruction.command == 2) {
+                        program.status = "Reading BACK";
+                        program.commandTimer += GetFrameTime();
+
+                        if (program.commandTimer < 0.2f) {
+                            continue;
+                        }
+                        if (instruction.argument > program.cardIndex) {
+                            program.status = "INVALID BACK";
+                            continue;
+                        }
+
+                        program.cardIndex -= instruction.argument;
+                        program.completedActions = 0;
+                        program.commandTimer = 0.0f;
+                        continue;
+                    }
+                    if (instruction.command == 4) {
+                        program.status = "Reading SLOT";
+                        program.commandTimer += GetFrameTime();
+
+                        if (program.commandTimer < 0.2f) {
+                            continue;
+                        }
+                        if (line.ends.empty()) {
+                            program.status = "NO LINE END";
+                            continue;
+                        }
+
+                        auto route = getControllerRoute(col, row);
+                        if (route.empty()) {
+                            program.status = "LINE BROKEN";
+                            continue;
+                        }
+
+                        RollerEnd activeEnd = {
+                            route.back().cell,
+                            route.back().exitSide
+                        };
+                        RollerCell building = NeighborCell(
+                            activeEnd.cell, activeEnd.side
+                        );
+                        int slotCount = getBuildingSlotCount(building);
+
+                        if (slotCount == 0) {
+                            program.status = "NO BUILDING CONNECTED";
+                            continue;
+                        }
+                        if (instruction.argument > slotCount) {
+                            program.status = "INVALID SLOT";
+                            continue;
+                        }
+
+                        rollerEndSlots[activeEnd.cell.y][activeEnd.cell.x]
+                                      [static_cast<int>(activeEnd.side)] =
+                            instruction.argument;
+
+                        program.commandTimer = 0.0f;
+                        program.cardIndex++;
+                        program.status =
+                            program.cardIndex >= (int)reader.cards.size()
+                            ? "Done" : "Next card";
+                        continue;
+                    }
+                    program.status = "Reading REVERSE";
+                    program.commandTimer += GetFrameTime();
+                    if (program.commandTimer < 0.2f) {
+                        continue;
+                    }
+                    rollerEntrySides[row][col] = OtherRollerSide(
+                        rollerShapes[row][col], rollerEntrySides[row][col]
+                    );
+                    program.commandTimer = 0.0f;
+                    program.cardIndex++;
+                    program.status =
+                        program.cardIndex >= (int)reader.cards.size()
+                        ? "Done" : "Next card";
+                }
+            }
+
             if (choosingControllerX != -1 && choosingControllerY != -1 &&
                 !directionSelectionStartedThisFrame) {
                 auto choices = getDirectionChoices(
@@ -2313,6 +2738,25 @@ int main() {
                     );
                     int tileX = col * TILE_SIZE;
                     int tileY = row * TILE_SIZE;
+                    const InventorySlot& cargo = rollerCargo[row][col];
+                    if (cargo.amount > 0) {
+                        if (cargo.type == ItemType::IronPlate) {
+                            DrawRectangle(
+                                col * TILE_SIZE + 4,
+                                row * TILE_SIZE + 7,
+                                12, 6, LIGHTGRAY
+                            );
+                        }
+                        else {
+                            Color cargoColor =
+                                cargo.type == ItemType::Coal ? BLACK : BROWN;
+                            DrawCircle(
+                                col * TILE_SIZE + TILE_SIZE / 2,
+                                row * TILE_SIZE + TILE_SIZE / 2,
+                                5, cargoColor
+                            );
+                        }
+                    }
 
                     if (isRollerConnected(col, row, RollerSide::Left)) {
                         DrawRectangle(tileX + 1, tileY + 8, 3, 4, GREEN);
@@ -2465,6 +2909,15 @@ int main() {
                 }
 
                 DrawCircle(edgeX, edgeY, 3, ORANGE);
+                int slotNumber =
+                    rollerEndSlots[end.cell.y][end.cell.x]
+                                  [static_cast<int>(end.side)];
+                if (slotNumber > 0) {
+                    DrawText(
+                        TextFormat("%i", slotNumber),
+                        edgeX + 5, edgeY - 10, 14, DARKBLUE
+                    );
+                }
             }
 
             DrawText(
@@ -2657,6 +3110,40 @@ int main() {
                 DrawText("Roller", 25, 75, 24, WHITE);
                 if (isController) {
                     DrawText("Controller", 25, 110, 20, GOLD);
+                    if (rollerDirectionSet[openedRollerY][openedRollerX]) {
+                        const RollerProgram& program =
+                            rollerPrograms[openedRollerY][openedRollerX];
+                        const InventorySlot& reader =
+                            rollerReaders[openedRollerY][openedRollerX];
+                        DrawText(program.status, 25, 135, 14, WHITE);
+                        DrawText(
+                            TextFormat("Energy: %i", program.energy),
+                            25, 153, 14, GOLD
+                        );
+                        if (reader.amount > 0 &&
+                            program.cardIndex < (int)reader.cards.size() &&
+                            reader.cards[program.cardIndex].command == 1) {
+                            DrawText(
+                                TextFormat(
+                                    "Steps: %i/%i",
+                                    program.completedActions,
+                                    reader.cards[program.cardIndex].argument
+                                ),
+                                100, 153, 14, LIGHTGRAY
+                            );
+                        }
+                        if (reader.amount > 0) {
+                            int total = (int)reader.cards.size();
+                            int shownCard = program.cardIndex + 1;
+                            if (shownCard > total) {
+                                shownCard = total;
+                            }
+                            DrawText(
+                                TextFormat("Card: %i/%i", shownCard, total),
+                                25, 171, 14, LIGHTGRAY
+                            );
+                        }
+                    }
                     const InventorySlot& fuel =
                         rollerFuel[openedRollerY][openedRollerX];
                     DrawText("1. Coal", 25, 190, 18, WHITE);
@@ -2669,6 +3156,20 @@ int main() {
                         TextFormat("%i / 200", fuel.amount),
                         25, 285, 18, WHITE
                     );
+                    const InventorySlot& reader =
+                        rollerReaders[openedRollerY][openedRollerX];
+                    DrawText("Reader", 25, 308, 18, WHITE);
+                    DrawRectangleRec(rollerReaderRect, GRAY);
+                    DrawRectangleLinesEx(rollerReaderRect, 1, GOLD);
+                    if (reader.amount == 0) {
+                        DrawText("Insert card", 35, 339, 18, LIGHTGRAY);
+                    }
+                    else {
+                        DrawText(
+                            TextFormat("Cards: %i", (int)reader.cards.size()),
+                            35, 339, 18, GOLD
+                        );
+                    }
                 }
                 else {
                     DrawText("Regular roller", 25, 110, 16, LIGHTGRAY);
