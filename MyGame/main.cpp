@@ -784,6 +784,9 @@ int main() {
         if (grid[cell.y][cell.x] == TileType::Drill) {
             return 2;
         }
+        if (grid[cell.y][cell.x] == TileType::Chest) {
+            return CHEST_SIZE;
+        }
 
         return 0;
     };
@@ -806,6 +809,11 @@ int main() {
             DrillStorage& drill = drills[origin.y][origin.x];
             if (slot == 1) return &drill.fuel;
             if (slot == 2) return &drill.output;
+        }
+        else if (grid[cell.y][cell.x] == TileType::Chest &&
+                 slot >= 1 && slot <= CHEST_SIZE) {
+            const RollerCell origin = buildingOrigins[cell.y][cell.x];
+            return &chests[origin.y][origin.x].slots[slot - 1];
         }
 
         return nullptr;
@@ -840,6 +848,12 @@ int main() {
         return ItemType::Empty;
     };
 
+    auto canCarryOnRoller = [](ItemType type) {
+        return type == ItemType::IronOre || type == ItemType::Coal ||
+            type == ItemType::Stone || type == ItemType::Wood ||
+            type == ItemType::IronPlate;
+    };
+
     auto unloadRollerCargo = [&](RollerEnd end) {
         InventorySlot& cargo = rollerCargo[end.cell.y][end.cell.x];
         if (cargo.amount == 0) {
@@ -852,9 +866,13 @@ int main() {
         InventorySlot* target = getBuildingSlot(building, slotNumber);
 
         if (target == nullptr ||
-            getAcceptedItem(building, slotNumber) != cargo.type ||
             (target->amount > 0 && target->type != cargo.type) ||
             target->amount >= GetMaxStack(cargo.type)) {
+            return false;
+        }
+
+        if (grid[building.y][building.x] != TileType::Chest &&
+            getAcceptedItem(building, slotNumber) != cargo.type) {
             return false;
         }
 
@@ -875,7 +893,8 @@ int main() {
         RollerCell building = NeighborCell(end.cell, end.side);
         InventorySlot* source = getBuildingSlot(building, slotNumber);
 
-        if (source == nullptr || source->amount == 0) {
+        if (source == nullptr || source->amount == 0 ||
+            !canCarryOnRoller(source->type)) {
             return false;
         }
 
@@ -3169,8 +3188,16 @@ int main() {
                             );
                         }
                         else {
-                            Color cargoColor =
-                                cargo.type == ItemType::Coal ? BLACK : BROWN;
+                            Color cargoColor = BROWN;
+                            if (cargo.type == ItemType::Coal) {
+                                cargoColor = BLACK;
+                            }
+                            else if (cargo.type == ItemType::Stone) {
+                                cargoColor = GRAY;
+                            }
+                            else if (cargo.type == ItemType::Wood) {
+                                cargoColor = DARKBROWN;
+                            }
                             DrawCircle(
                                 col * TILE_SIZE + TILE_SIZE / 2,
                                 row * TILE_SIZE + TILE_SIZE / 2,
