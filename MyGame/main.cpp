@@ -120,6 +120,18 @@ struct RollerLine {
     std::vector<RollerEnd> ends;
 };
 
+bool HasRollerCell(
+    const std::vector<RollerCell>& cells,
+    RollerCell target
+) {
+    for (const RollerCell& cell : cells) {
+        if (cell.x == target.x && cell.y == target.y) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool HasRollerSide(int shape, RollerSide side) {
     // Порядок форм: ─ │ └ ┌ ┐ ┘
     switch (side) {
@@ -367,6 +379,8 @@ int main() {
         int cardIndex = 0;
         float commandTimer = 0.0f;
         const char* status = "Insert card";
+        std::vector<RollerCell> lineCells;
+        bool lineBroken = false;
     };
     RollerProgram rollerPrograms[ROWS][COLS] = {};
     bool rollerDirectionSet[ROWS][COLS] = {};
@@ -700,6 +714,60 @@ int main() {
             *source = {};
         }
         return true;
+    };
+
+    auto moveLoopCargo = [&](const std::vector<RollerStep>& route) {
+        int count = (int)route.size();
+        if (count == 0) {
+            return false;
+        }
+
+        std::vector<InventorySlot> previous;
+        previous.reserve(count);
+
+        bool hasEmpty = false;
+        for (const RollerStep& step : route) {
+            const InventorySlot& cargo =
+                rollerCargo[step.cell.y][step.cell.x];
+            previous.push_back(cargo);
+            if (cargo.amount == 0) {
+                hasEmpty = true;
+            }
+        }
+
+        if (!hasEmpty) {
+            return false;
+        }
+
+        std::vector<InventorySlot> next = previous;
+        bool moved = false;
+
+        for (int empty = 0; empty < count; empty++) {
+            if (previous[empty].amount > 0) {
+                continue;
+            }
+
+            int to = empty;
+            int from = (to + count - 1) % count;
+
+            while (previous[from].amount > 0) {
+                next[to] = previous[from];
+                next[from] = {};
+                moved = true;
+
+                to = from;
+                from = (from + count - 1) % count;
+            }
+        }
+
+        if (moved) {
+            for (int i = 0; i < count; i++) {
+                RollerCell cell = route[i].cell;
+                rollerCargo[cell.y][cell.x] = next[i];
+            }
+        }
+
+        return moved;
     };
     
     grid[10][15] = TileType::IronOre;
@@ -2471,6 +2539,36 @@ int main() {
                             controllerCount++;
                         }
                     }
+                    if (program.lineCells.empty()) {
+                        program.lineCells = line.cells;
+                    }
+
+                    bool missingCell = false;
+                    for (const RollerCell& expected : program.lineCells) {
+                        if (!HasRollerCell(line.cells, expected)) {
+                            missingCell = true;
+                            break;
+                        }
+                    }
+
+                    if (missingCell) {
+                        program.lineBroken = true;
+                    }
+
+                    if (program.lineBroken) {
+                        if (missingCell) {
+                            program.status = "LINE BROKEN";
+                            continue;
+                        }
+
+                        program.lineBroken = false;
+                        program.lineCells = line.cells;
+                    }
+
+                    if (controllerCount == 1) {
+                        program.lineCells = line.cells;
+                    }
+
                     if (controllerCount > 1) {
                         program.status = "CONFLICT";
                         continue;
@@ -2486,10 +2584,7 @@ int main() {
                     const CardInstruction& instruction =
                         reader.cards[program.cardIndex];
                     if (instruction.command == 1) {
-                        if (line.ends.empty()) {
-                            program.status = "COMMAND PENDING";
-                            continue;
-                        }
+                        bool isLoop = line.ends.empty();
 
                         auto route = getControllerRoute(col, row);
                         if (route.empty()) {
@@ -2497,50 +2592,57 @@ int main() {
                             continue;
                         }
 
-                        RollerCell firstCell = route.front().cell;
-                        RollerEnd sourceEnd = {
-                            firstCell,
-                            OtherRollerSide(
-                                rollerShapes[firstCell.y][firstCell.x],
-                                route.front().exitSide
-                            )
-                        };
-                        RollerEnd targetEnd = {
-                            route.back().cell,
-                            route.back().exitSide
-                        };
+                        RollerEnd sourceEnd = {};
+                        RollerEnd targetEnd = {};
 
-                        bool connectionError = false;
-                        const RollerEnd ends[] = {sourceEnd, targetEnd};
-
-                        for (const RollerEnd& end : ends) {
-                            int slotNumber =
-                                rollerEndSlots[end.cell.y][end.cell.x]
-                                              [static_cast<int>(end.side)];
-                            if (slotNumber == 0) {
-                                program.status = "SLOT NOT SET";
-                                connectionError = true;
-                                break;
-                            }
-
-                            RollerCell building = NeighborCell(
-                                end.cell, end.side
-                            );
-                            int slotCount = getBuildingSlotCount(building);
-                            if (slotCount == 0) {
-                                program.status = "NO BUILDING CONNECTED";
-                                connectionError = true;
-                                break;
-                            }
-                            if (slotNumber > slotCount) {
-                                program.status = "INVALID SLOT";
-                                connectionError = true;
-                                break;
-                            }
+                        if (!isLoop) {
+                            RollerCell firstCell = route.front().cell;
+                            sourceEnd = {
+                                firstCell,
+                                OtherRollerSide(
+                                    rollerShapes[firstCell.y][firstCell.x],
+                                    route.front().exitSide
+                                )
+                            };
+                            targetEnd = {
+                                route.back().cell,
+                                route.back().exitSide
+                            };
                         }
 
-                        if (connectionError) {
-                            continue;
+                        if (!isLoop) {
+                            bool connectionError = false;
+                            const RollerEnd ends[] = {sourceEnd, targetEnd};
+
+                            for (const RollerEnd& end : ends) {
+                                int slotNumber =
+                                    rollerEndSlots[end.cell.y][end.cell.x]
+                                                  [static_cast<int>(end.side)];
+                                if (slotNumber == 0) {
+                                    program.status = "SLOT NOT SET";
+                                    connectionError = true;
+                                    break;
+                                }
+
+                                RollerCell building = NeighborCell(
+                                    end.cell, end.side
+                                );
+                                int slotCount = getBuildingSlotCount(building);
+                                if (slotCount == 0) {
+                                    program.status = "NO BUILDING CONNECTED";
+                                    connectionError = true;
+                                    break;
+                                }
+                                if (slotNumber > slotCount) {
+                                    program.status = "INVALID SLOT";
+                                    connectionError = true;
+                                    break;
+                                }
+                            }
+
+                            if (connectionError) {
+                                continue;
+                            }
                         }
 
                         if (program.energy == 0) {
@@ -2561,27 +2663,29 @@ int main() {
                             continue;
                         }
 
-                        bool moved = false;
+                        bool moved = isLoop && moveLoopCargo(route);
 
-                        if (unloadRollerCargo(targetEnd)) {
-                            moved = true;
-                        }
-
-                        for (int i = (int)route.size() - 1; i > 0; i--) {
-                            RollerCell from = route[i - 1].cell;
-                            RollerCell to = route[i].cell;
-
-                            if (rollerCargo[to.y][to.x].amount == 0 &&
-                                rollerCargo[from.y][from.x].amount > 0) {
-                                rollerCargo[to.y][to.x] =
-                                    rollerCargo[from.y][from.x];
-                                rollerCargo[from.y][from.x] = {};
+                        if (!isLoop) {
+                            if (unloadRollerCargo(targetEnd)) {
                                 moved = true;
                             }
-                        }
 
-                        if (loadRollerCargo(sourceEnd)) {
-                            moved = true;
+                            for (int i = (int)route.size() - 1; i > 0; i--) {
+                                RollerCell from = route[i - 1].cell;
+                                RollerCell to = route[i].cell;
+
+                                if (rollerCargo[to.y][to.x].amount == 0 &&
+                                    rollerCargo[from.y][from.x].amount > 0) {
+                                    rollerCargo[to.y][to.x] =
+                                        rollerCargo[from.y][from.x];
+                                    rollerCargo[from.y][from.x] = {};
+                                    moved = true;
+                                }
+                            }
+
+                            if (loadRollerCargo(sourceEnd)) {
+                                moved = true;
+                            }
                         }
 
                         if (!moved) {
