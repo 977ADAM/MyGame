@@ -368,6 +368,8 @@ int main() {
     float craftTimer = 0.0f;
     
     TileType grid[ROWS][COLS] = {};
+    const int LARGE_BUILDING_SIZE = 2;
+    RollerCell buildingOrigins[ROWS][COLS] = {};
     int rollerShapes[ROWS][COLS] = {};
     bool rollerControllers[ROWS][COLS] = {};
     InventorySlot rollerFuel[ROWS][COLS] = {};
@@ -584,6 +586,56 @@ int main() {
     int durability[ROWS][COLS] = {};
     int resourceAmount[ROWS][COLS] = {};
 
+    auto isLargeBuilding = [](TileType tile) {
+        return tile == TileType::Furnace || tile == TileType::Drill;
+    };
+
+    auto isBuildingOrigin = [&](int col, int row) {
+        const RollerCell origin = buildingOrigins[row][col];
+        return origin.x == col && origin.y == row;
+    };
+
+    auto placeLargeBuilding = [&](RollerCell origin, TileType type) {
+        for (int row = origin.y; row < origin.y + LARGE_BUILDING_SIZE; row++) {
+            for (int col = origin.x; col < origin.x + LARGE_BUILDING_SIZE; col++) {
+                if (type == TileType::Drill) {
+                    drillDeposits[row][col] = grid[row][col];
+                }
+                grid[row][col] = type;
+                buildingOrigins[row][col] = origin;
+            }
+        }
+    };
+
+    auto removeLargeBuilding = [&](RollerCell origin) {
+        for (int row = origin.y; row < origin.y + LARGE_BUILDING_SIZE; row++) {
+            for (int col = origin.x; col < origin.x + LARGE_BUILDING_SIZE; col++) {
+                grid[row][col] = resourceAmount[row][col] > 0
+                    ? drillDeposits[row][col] : TileType::Empty;
+                drillDeposits[row][col] = TileType::Empty;
+                buildingOrigins[row][col] = {};
+            }
+        }
+    };
+
+    auto getDepositItem = [](TileType tile) {
+        if (tile == TileType::IronOre) return ItemType::IronOre;
+        if (tile == TileType::Coal) return ItemType::Coal;
+        return ItemType::Empty;
+    };
+
+    auto findDrillDeposit = [&](RollerCell origin, bool includeDepleted = false) {
+        for (int row = origin.y; row < origin.y + LARGE_BUILDING_SIZE; row++) {
+            for (int col = origin.x; col < origin.x + LARGE_BUILDING_SIZE; col++) {
+                if (drillDeposits[row][col] != TileType::Empty &&
+                    (includeDepleted || resourceAmount[row][col] > 0)) {
+                    return RollerCell{col, row};
+                }
+            }
+        }
+        return RollerCell{-1, -1};
+    };
+
     struct FurnaceStorage {
         InventorySlot ore = {};
         InventorySlot fuel = {};
@@ -637,13 +689,15 @@ int main() {
         }
 
         if (grid[cell.y][cell.x] == TileType::Furnace) {
-            FurnaceStorage& furnace = furnaces[cell.y][cell.x];
+            const RollerCell origin = buildingOrigins[cell.y][cell.x];
+            FurnaceStorage& furnace = furnaces[origin.y][origin.x];
             if (slot == 1) return &furnace.ore;
             if (slot == 2) return &furnace.fuel;
             if (slot == 3) return &furnace.output;
         }
         else if (grid[cell.y][cell.x] == TileType::Drill) {
-            DrillStorage& drill = drills[cell.y][cell.x];
+            const RollerCell origin = buildingOrigins[cell.y][cell.x];
+            DrillStorage& drill = drills[origin.y][origin.x];
             if (slot == 1) return &drill.fuel;
             if (slot == 2) return &drill.output;
         }
@@ -660,8 +714,20 @@ int main() {
         else if (grid[cell.y][cell.x] == TileType::Drill) {
             if (slot == 1) return ItemType::Coal;
             if (slot == 2) {
-                return drillDeposits[cell.y][cell.x] == TileType::IronOre
-                    ? ItemType::IronOre : ItemType::Coal;
+                const RollerCell origin = buildingOrigins[cell.y][cell.x];
+                const InventorySlot& output = drills[origin.y][origin.x].output;
+                if (output.amount > 0) {
+                    return output.type;
+                }
+
+                RollerCell deposit = findDrillDeposit(origin);
+                if (deposit.x == -1) {
+                    // После исчерпания выход сохраняет тип первой залежи.
+                    deposit = findDrillDeposit(origin, true);
+                }
+                if (deposit.x != -1) {
+                    return getDepositItem(drillDeposits[deposit.y][deposit.x]);
+                }
             }
         }
 
@@ -777,6 +843,7 @@ int main() {
     
     grid[5][9] = TileType::Coal;
     grid[5][10] = TileType::Coal;
+    grid[12][14] = TileType::Coal;
     
     grid[8][12] = TileType::Boulder;
     grid[8][13] = TileType::Boulder;
@@ -1007,41 +1074,39 @@ int main() {
                 selectedRollerShape = (selectedRollerShape + 1) % 6;
             }
 
-            // Проверяем возможность строительства в выбранной клетке.
+            // Проверяем всю площадь выбранной постройки.
             if (insideMap) {
-
-                // Прямоугольник выбранной клетки
+                const int buildSize = (placingFurnace || placingDrill)
+                    ? LARGE_BUILDING_SIZE : 1;
+                const float buildPixels = (float)(buildSize * TILE_SIZE);
                 Rectangle cell = {
                     (float)(cellX * TILE_SIZE),
                     (float)(cellY * TILE_SIZE),
-                    (float)TILE_SIZE,
-                    (float)TILE_SIZE
+                    buildPixels, buildPixels
                 };
 
-                // Проверяем, свободна ли клетка
-                bool isEmpty =
-                    grid[cellY][cellX] == TileType::Empty;
+                bool areaAvailable = cellX + buildSize <= COLS &&
+                    cellY + buildSize <= ROWS;
+                bool hasDeposit = false;
+                for (int row = cellY; areaAvailable && row < cellY + buildSize; row++) {
+                    for (int col = cellX; col < cellX + buildSize; col++) {
+                        const TileType tile = grid[row][col];
+                        if (tile == TileType::Empty) {
+                            continue;
+                        }
+                        if (placingDrill && getDepositItem(tile) != ItemType::Empty &&
+                            resourceAmount[row][col] > 0) {
+                            hasDeposit = true;
+                            continue;
+                        }
+                        areaAvailable = false;
+                        break;
+                    }
+                }
 
-                // Проверяем столкновение с персонажем
-                bool playerCollision =
-                    CheckCollisionRecs(cell, player);
-
-                // Проверяем столкновение со стеной
-                bool wallCollision =
-                    CheckCollisionRecs(cell, wall);
-
-                bool isDeposit =
-                    grid[cellY][cellX] == TileType::IronOre ||
-                    grid[cellY][cellX] == TileType::Coal;
-                bool suitableTile = placingDrill
-                    ? isDeposit && resourceAmount[cellY][cellX] > 0
-                    : isEmpty;
-
-                // Проверяем место для выбранной постройки.
-                canBuild =
-                    suitableTile &&
-                    !playerCollision &&
-                    !wallCollision;
+                canBuild = areaAvailable && (!placingDrill || hasDeposit) &&
+                    !CheckCollisionRecs(cell, player) &&
+                    !CheckCollisionRecs(cell, wall);
 
                 // ЛКМ — строим
                 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
@@ -1066,7 +1131,7 @@ int main() {
                             inventory[i].amount > 0) {
 
                             // Устанавливаем печь
-                            grid[cellY][cellX] = TileType::Furnace;
+                            placeLargeBuilding({cellX, cellY}, TileType::Furnace);
                             furnacePlacedThisFrame = true;
 
                             // Расходуем один предмет
@@ -1096,8 +1161,7 @@ int main() {
                             inventory[i].amount == 0) {
                             continue;
                         }
-                        drillDeposits[cellY][cellX] = grid[cellY][cellX];
-                        grid[cellY][cellX] = TileType::Drill;
+                        placeLargeBuilding({cellX, cellY}, TileType::Drill);
                         drillPlacedThisFrame = true;
                         inventory[i].amount--;
                         if (inventory[i].amount == 0) {
@@ -1187,10 +1251,12 @@ int main() {
             }
 
             if (canDismantle) {
+                const RollerCell target = isLargeBuilding(grid[cellY][cellX])
+                    ? buildingOrigins[cellY][cellX] : RollerCell{cellX, cellY};
                 // При переходе на другую постройку начинаем заново.
-                if (dismantleX != cellX || dismantleY != cellY) {
-                    dismantleX = cellX;
-                    dismantleY = cellY;
+                if (dismantleX != target.x || dismantleY != target.y) {
+                    dismantleX = target.x;
+                    dismantleY = target.y;
                     dismantleTimer = 0.0f;
                 }
 
@@ -1251,7 +1317,7 @@ int main() {
                         }
                     }
                     else if (grid[cellY][cellX] == TileType::Drill) {
-                        DrillStorage& drill = drills[cellY][cellX];
+                        DrillStorage& drill = drills[target.y][target.x];
 
                         InventorySlot candidate[INVENTORY_SIZE];
                         for (int i = 0; i < INVENTORY_SIZE; i++) {
@@ -1288,9 +1354,7 @@ int main() {
                             }
 
                             drill = {};
-                            grid[cellY][cellX] = resourceAmount[cellY][cellX] > 0
-                                ? drillDeposits[cellY][cellX] : TileType::Empty;
-                            drillDeposits[cellY][cellX] = TileType::Empty;
+                            removeLargeBuilding(target);
                             dismantleX = -1;
                             dismantleY = -1;
                             dismantleTimer = 0.0f;
@@ -1300,7 +1364,7 @@ int main() {
                         }
                     }
                     else {
-                        FurnaceStorage& furnace = furnaces[cellY][cellX];
+                        FurnaceStorage& furnace = furnaces[target.y][target.x];
 
                         // Проверяем вместимость на копии инвентаря.
                         InventorySlot candidate[INVENTORY_SIZE];
@@ -1344,7 +1408,7 @@ int main() {
                             }
 
                             furnace = {};
-                            grid[cellY][cellX] = TileType::Empty;
+                            removeLargeBuilding(target);
 
                             dismantleX = -1;
                             dismantleY = -1;
@@ -1600,8 +1664,9 @@ int main() {
                 if (CheckCollisionPointCircle(
                     furnaceCenter, playerCenter, 60.0f
                 )) {
-                    openedFurnaceX = cellX;
-                    openedFurnaceY = cellY;
+                    const RollerCell origin = buildingOrigins[cellY][cellX];
+                    openedFurnaceX = origin.x;
+                    openedFurnaceY = origin.y;
                     inventoryOpen = true;
                 }
             }
@@ -1627,8 +1692,9 @@ int main() {
                 if (CheckCollisionPointCircle(
                     drillCenter, playerCenter, 60.0f
                 )) {
-                    openedDrillX = cellX;
-                    openedDrillY = cellY;
+                    const RollerCell origin = buildingOrigins[cellY][cellX];
+                    openedDrillX = origin.x;
+                    openedDrillY = origin.y;
                     inventoryOpen = true;
                 }
             }
@@ -2309,7 +2375,8 @@ int main() {
             // Плавка по установленной карте RUN.
             for (int row = 0; row < ROWS; row++) {
                 for (int col = 0; col < COLS; col++) {
-                    if (grid[row][col] != TileType::Furnace) {
+                    if (grid[row][col] != TileType::Furnace ||
+                        !isBuildingOrigin(col, row)) {
                         continue;
                     }
                     FurnaceStorage& furnace = furnaces[row][col];
@@ -2405,7 +2472,8 @@ int main() {
             // Добыча по установленной карте RUN.
             for (int row = 0; row < ROWS; row++) {
                 for (int col = 0; col < COLS; col++) {
-                    if (grid[row][col] != TileType::Drill) {
+                    if (grid[row][col] != TileType::Drill ||
+                        !isBuildingOrigin(col, row)) {
                         continue;
                     }
 
@@ -2424,12 +2492,19 @@ int main() {
                     const CardInstruction& instruction =
                         drill.reader.cards[drill.cardIndex];
 
-                    bool isIron = drillDeposits[row][col] == TileType::IronOre;
-                    ItemType resource = isIron ? ItemType::IronOre : ItemType::Coal;
-
+                    RollerCell deposit = {-1, -1};
+                    ItemType resource = ItemType::Empty;
                     if (instruction.command == 1) {
-                        if (resourceAmount[row][col] == 0) {
+                        deposit = findDrillDeposit({col, row});
+                        if (deposit.x == -1) {
                             drill.status = "DEPOSIT DEPLETED";
+                            continue;
+                        }
+                        resource = getDepositItem(drillDeposits[deposit.y][deposit.x]);
+                        if (drill.output.amount > 0 && drill.output.type != resource) {
+                            drill.status = resource == ItemType::IronOre
+                                ? "Clear output. Next resource: iron ore"
+                                : "Clear output. Next resource: coal";
                             continue;
                         }
                         if (drill.output.amount >= GetMaxStack(resource)) {
@@ -2485,15 +2560,17 @@ int main() {
                     drill.hitTimer = 0.0f;
                     drill.energy--;
                     drill.completedActions++;
-                    durability[row][col]--;
+                    int& hitsLeft = durability[deposit.y][deposit.x];
+                    int& remaining = resourceAmount[deposit.y][deposit.x];
+                    hitsLeft--;
 
-                    if (durability[row][col] <= 0) {
+                    if (hitsLeft <= 0) {
                         drill.output.type = resource;
                         drill.output.amount++;
-                        resourceAmount[row][col]--;
+                        remaining--;
 
-                        if (resourceAmount[row][col] > 0) {
-                            durability[row][col] = isIron ? 3 : 2;
+                        if (remaining > 0) {
+                            hitsLeft = resource == ItemType::IronOre ? 3 : 2;
                         }
                     }
 
@@ -2508,12 +2585,6 @@ int main() {
                             drill.completedActions = 0;
                             drill.status = "Next card";
                         }
-                    }
-                    else if (resourceAmount[row][col] == 0) {
-                        drill.status = "DEPOSIT DEPLETED";
-                    }
-                    else if (drill.energy == 0 && drill.fuel.amount == 0) {
-                        drill.status = "FUEL EXHAUSTED";
                     }
                 }
             }
@@ -2884,6 +2955,11 @@ int main() {
                     continue;
                 }
 
+                const bool largeBuilding = isLargeBuilding(tile);
+                if (largeBuilding && !isBuildingOrigin(col, row)) {
+                    continue;
+                }
+
                 Color color;
 
                 if (tile == TileType::Wall) {
@@ -2917,11 +2993,11 @@ int main() {
                     continue;
                 }
 
+                const int size = (largeBuilding ? LARGE_BUILDING_SIZE : 1) * TILE_SIZE;
                 DrawRectangle(
                     col * TILE_SIZE,
                     row * TILE_SIZE,
-                    TILE_SIZE,
-                    TILE_SIZE,
+                    size, size,
                     color
                 );
                 
@@ -3061,17 +3137,19 @@ int main() {
             int barX = dismantleX * TILE_SIZE;
             int barY = dismantleY * TILE_SIZE - 8;
 
-            // У верхнего края рисуем полоску под печью.
+            const int size = isLargeBuilding(grid[dismantleY][dismantleX])
+                ? LARGE_BUILDING_SIZE * TILE_SIZE : TILE_SIZE;
+            // У верхнего края рисуем полоску под постройкой.
             if (barY < 0) {
-                barY = dismantleY * TILE_SIZE + TILE_SIZE + 2;
+                barY = dismantleY * TILE_SIZE + size + 2;
             }
 
             float progress = dismantleTimer / DISMANTLE_TIME;
 
-            DrawRectangle(barX, barY, TILE_SIZE, 5, DARKGRAY);
+            DrawRectangle(barX, barY, size, 5, DARKGRAY);
             DrawRectangle(
                 barX, barY,
-                (int)(TILE_SIZE * progress), 5,
+                (int)(size * progress), 5,
                 ORANGE
             );
         }
@@ -3143,19 +3221,19 @@ int main() {
                     previewColor = RED;
                 }
 
+                const int size = (placingFurnace || placingDrill)
+                    ? LARGE_BUILDING_SIZE * TILE_SIZE : TILE_SIZE;
                 DrawRectangle(
                     cellX * TILE_SIZE,
                     cellY * TILE_SIZE,
-                    TILE_SIZE,
-                    TILE_SIZE,
+                    size, size,
                     Fade(previewColor, 0.4f)
                 );
 
                 DrawRectangleLines(
                     cellX * TILE_SIZE,
                     cellY * TILE_SIZE,
-                    TILE_SIZE,
-                    TILE_SIZE,
+                    size, size,
                     previewColor
                 );
             }
