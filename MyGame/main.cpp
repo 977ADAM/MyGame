@@ -5,6 +5,7 @@
 #include <queue>
 #include <string>
 #include <vector>
+#include <utility>
 
 // Типы предметов
 enum class ItemType {
@@ -320,6 +321,19 @@ int main() {
     
     // Открыта ли карта мира
     bool worldMapOpen = false;
+    
+    
+    // Грузовой склад железной шахты
+    int mineCargoIron = 0;
+
+    // Максимальная вместимость склада
+    const int MINE_CARGO_CAPACITY = 200;
+    
+    // Грузовой склад мастерской
+    int workshopCargoIron = 0;
+
+    // Вместимость склада мастерской
+    const int WORKSHOP_CARGO_CAPACITY = 200;
 
     SetTargetFPS(60);
     
@@ -741,6 +755,24 @@ int main() {
     TileType drillDeposits[ROWS][COLS] = {};
     int durability[ROWS][COLS] = {};
     int resourceAmount[ROWS][COLS] = {};
+    
+    // Отдельная карта железной шахты
+    static TileType ironMineGrid[ROWS][COLS] = {};
+
+    // Прочность и количество ресурсов в шахте
+    static int ironMineDurability[ROWS][COLS] = {};
+    static int ironMineResourceAmount[ROWS][COLS] = {};
+    
+    
+    // Создаём месторождение железа в шахте
+    for (int row = 8; row <= 12; row++) {
+        for (int col = 18; col <= 23; col++) {
+
+            ironMineGrid[row][col] = TileType::IronOre;
+            ironMineDurability[row][col] = 3;
+            ironMineResourceAmount[row][col] = 5;
+        }
+    }
 
     auto isLargeBuilding = [](TileType tile) {
         return tile == TileType::Furnace || tile == TileType::Drill || tile == TileType::Chest;
@@ -827,6 +859,39 @@ int main() {
         InventorySlot slots[CHEST_SIZE] = {};
     };
     ChestStorage chests[ROWS][COLS] = {};
+    
+    
+    // ==========================================
+    // IRON MINE — Данные механизмов шахты
+    // ==========================================
+
+    // Расположение крупных построек
+    static RollerCell ironMineBuildingOrigins[ROWS][COLS] = {};
+
+    // Роликовые транспортёры
+    static int ironMineRollerShapes[ROWS][COLS] = {};
+    static bool ironMineRollerControllers[ROWS][COLS] = {};
+
+    static InventorySlot ironMineRollerFuel[ROWS][COLS] = {};
+    static InventorySlot ironMineRollerReaders[ROWS][COLS] = {};
+    static InventorySlot ironMineRollerCargo[ROWS][COLS] = {};
+
+    static RollerProgram ironMineRollerPrograms[ROWS][COLS] = {};
+
+    static bool ironMineRollerDirectionSet[ROWS][COLS] = {};
+    static RollerSide ironMineRollerEntrySides[ROWS][COLS] = {};
+
+    static RollerSlots ironMineRollerEndSlots[ROWS][COLS][4] = {};
+
+    // Буры и месторождения под ними
+    static TileType ironMineDrillDeposits[ROWS][COLS] = {};
+    static DrillStorage ironMineDrills[ROWS][COLS] = {};
+
+    // Печи
+    static FurnaceStorage ironMineFurnaces[ROWS][COLS] = {};
+
+    // Сундуки
+    static ChestStorage ironMineChests[ROWS][COLS] = {};
 
     auto getBuildingSlotCount = [&](RollerCell cell) {
         if (cell.x < 0 || cell.x >= COLS ||
@@ -1137,6 +1202,51 @@ int main() {
     int choosingControllerX = -1;
     int choosingControllerY = -1;
     bool developerPanelOpen = false;
+    
+    
+    // ==========================================
+    // LOCATION — Переключение игровых территорий
+    // ==========================================
+
+    auto switchLocation = [&](Location destination) {
+
+        // Если уже находимся в этой локации,
+        // ничего переключать не нужно
+        if (currentLocation == destination) {
+            return;
+        }
+
+        // Карта и ресурсы
+        std::swap(grid, ironMineGrid);
+        std::swap(durability, ironMineDurability);
+        std::swap(resourceAmount, ironMineResourceAmount);
+
+        // Крупные постройки
+        std::swap(buildingOrigins, ironMineBuildingOrigins);
+
+        // Роликовые линии
+        std::swap(rollerShapes, ironMineRollerShapes);
+        std::swap(rollerControllers, ironMineRollerControllers);
+        std::swap(rollerFuel, ironMineRollerFuel);
+        std::swap(rollerReaders, ironMineRollerReaders);
+        std::swap(rollerCargo, ironMineRollerCargo);
+        std::swap(rollerPrograms, ironMineRollerPrograms);
+        std::swap(rollerDirectionSet, ironMineRollerDirectionSet);
+        std::swap(rollerEntrySides, ironMineRollerEntrySides);
+        std::swap(rollerEndSlots, ironMineRollerEndSlots);
+
+        // Месторождения под бурами
+        std::swap(drillDeposits, ironMineDrillDeposits);
+
+        // Производственные механизмы
+        std::swap(drills, ironMineDrills);
+        std::swap(furnaces, ironMineFurnaces);
+        std::swap(chests, ironMineChests);
+
+        // Запоминаем выбранную локацию
+        currentLocation = destination;
+    };
+
 
     while (!WindowShouldClose()) {
         
@@ -1148,6 +1258,28 @@ int main() {
             // Возвращаем игрока в центр территории
             x = 400;
             y = 200;
+        }
+        
+        
+        // ==========================================
+        // CARGO DELIVERY — Доставка железа
+        // ==========================================
+
+        // Отправка руды через карту мира
+        if (worldMapOpen && IsKeyPressed(KEY_T)) {
+
+            int freeSpace =
+                WORKSHOP_CARGO_CAPACITY - workshopCargoIron;
+
+            int amount = std::min(
+                10,
+                std::min(mineCargoIron, freeSpace)
+            );
+
+            if (amount > 0) {
+                mineCargoIron -= amount;
+                workshopCargoIron += amount;
+            }
         }
         
         // Выбор локации на карте мира
@@ -1162,7 +1294,7 @@ int main() {
 
             if (CheckCollisionPointRec(mapMouse, workshopButton)) {
 
-                currentLocation = Location::Workshop;
+                switchLocation(Location::Workshop);
                 worldMapOpen = false;
 
                 x = 400;
@@ -1172,7 +1304,7 @@ int main() {
             }
             else if (CheckCollisionPointRec(mapMouse, mineButton)) {
 
-                currentLocation = Location::IronMine;
+                switchLocation(Location::IronMine);
                 worldMapOpen = false;
 
                 x = 400;
@@ -1259,6 +1391,78 @@ int main() {
         // На паузе рисуем мир, но не обновляем его состояние.
         if (!developerPanelOpen && !panelToggled &&
             !worldMapOpen && !locationSelectedThisFrame) {
+            
+            
+            // ==========================================
+            // MINE CARGO — Загрузка железной руды
+            // ==========================================
+
+            if (currentLocation == Location::IronMine &&
+                IsKeyPressed(KEY_T)) {
+
+                for (int i = 0; i < INVENTORY_SIZE; i++) {
+
+                    if (inventory[i].type != ItemType::IronOre ||
+                        inventory[i].amount <= 0) {
+                        continue;
+                    }
+
+                    int freeSpace = MINE_CARGO_CAPACITY - mineCargoIron;
+
+                    // За одно нажатие загружаем до 10 единиц
+                    int amount = std::min(
+                        10,
+                        std::min(inventory[i].amount, freeSpace)
+                    );
+
+                    if (amount <= 0) {
+                        break;
+                    }
+
+                    inventory[i].amount -= amount;
+                    mineCargoIron += amount;
+
+                    if (inventory[i].amount == 0) {
+                        inventory[i] = {};
+                    }
+
+                    break;
+                }
+            }
+            
+            
+            // ==========================================
+            // WORKSHOP CARGO — Выгрузка железной руды
+            // ==========================================
+
+            if (currentLocation == Location::Workshop &&
+                IsKeyPressed(KEY_T) &&
+                !inventoryOpen) {
+
+                // Забираем до 10 единиц со склада
+                int amount = std::min(10, workshopCargoIron);
+
+                if (amount > 0) {
+
+                    int remaining = addToInventory(
+                        inventory,
+                        INVENTORY_SIZE,
+                        ItemType::IronOre,
+                        amount
+                    );
+
+                    // Убираем со склада только то,
+                    // что действительно поместилось в инвентарь
+                    workshopCargoIron -= amount - remaining;
+
+                    if (remaining > 0) {
+                        inventoryFullTimer = 1.0f;
+                    }
+                }
+            }
+            
+            
+            
             bool furnacePlacedThisFrame = false;
             bool drillPlacedThisFrame = false;
             bool rollerPlacedThisFrame = false;
@@ -1390,11 +1594,12 @@ int main() {
                         break;
                     }
                 }
-
+                
                 canBuild = areaAvailable && (!placingDrill || hasDeposit) &&
                     !CheckCollisionRecs(cell, player) &&
-                    !CheckCollisionRecs(cell, wall);
-
+                    !CheckCollisionRecs(cell, wall) &&
+                    !(currentLocation == Location::IronMine && placingFurnace);
+                
                 // ЛКМ — строим
                 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
                     canBuild &&
@@ -3300,7 +3505,19 @@ int main() {
 
         BeginDrawing();
 
-        ClearBackground(RAYWHITE);
+        // Цвет земли зависит от текущей локации
+        Color groundColor;
+
+        if (currentLocation == Location::Workshop) {
+            // Светлая земля мастерской
+            groundColor = Color{218, 208, 190, 255};
+        }
+        else {
+            // Каменистая земля шахты
+            groundColor = Color{175, 172, 165, 255};
+        }
+
+        ClearBackground(groundColor);
         
         for (int row = 0; row < ROWS; row++) {
             for (int col = 0; col < COLS; col++) {
@@ -3578,6 +3795,49 @@ int main() {
         }
         
         DrawText(TextFormat("Score: %i", score), 10, 10, 20, BLACK);
+        
+        
+        // Интерфейс грузового склада шахты
+        if (currentLocation == Location::IronMine &&
+            !worldMapOpen) {
+
+            DrawRectangle(540, 40, 250, 65, DARKGRAY);
+
+            DrawText(
+                TextFormat("IRON CARGO: %i / %i",
+                    mineCargoIron,
+                    MINE_CARGO_CAPACITY),
+                550, 50, 17, WHITE
+            );
+
+            DrawText(
+                "T - LOAD 10 IRON",
+                550, 78, 16, YELLOW
+            );
+        }
+        
+        
+        // ==========================================
+        // WORKSHOP CARGO — Интерфейс склада
+        // ==========================================
+
+        if (currentLocation == Location::Workshop &&
+            !worldMapOpen) {
+
+            DrawRectangle(540, 40, 250, 65, DARKGRAY);
+
+            DrawText(
+                TextFormat("IRON CARGO: %i / %i",
+                    workshopCargoIron,
+                    WORKSHOP_CARGO_CAPACITY),
+                550, 50, 17, WHITE
+            );
+
+            DrawText(
+                "T - TAKE 10 IRON",
+                550, 78, 16, YELLOW
+            );
+        }
         
         // Название текущей локации
         const char* locationName =
@@ -4567,6 +4827,23 @@ int main() {
         
         // Экран карты мира
         if (worldMapOpen) {
+            
+            
+            // Информация о грузовых складах
+            DrawText(
+                TextFormat("MINE: %i IRON", mineCargoIron),
+                100, 290, 18, WHITE
+            );
+
+            DrawText(
+                TextFormat("WORKSHOP: %i IRON", workshopCargoIron),
+                480, 290, 18, WHITE
+            );
+
+            DrawText(
+                "T - SEND 10 IRON TO WORKSHOP",
+                230, 335, 18, YELLOW
+            );
 
             DrawRectangle(0, 0, 800, 450, DARKBROWN);
 
