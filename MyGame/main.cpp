@@ -1,7 +1,9 @@
 
 #include <raylib.h>
 #include <algorithm>
+#include <bit>
 #include <queue>
+#include <string>
 #include <vector>
 
 // Типы предметов
@@ -83,6 +85,19 @@ Rectangle GetPunchHoleRect(int row, int column) {
         40,
         40
     };
+}
+
+constexpr int TAKE_COMMAND = 4;
+constexpr int PUT_COMMAND = 5;
+
+const char* FormatCardCommand(int command, int argument) {
+    const char* name = "UNKNOWN";
+    if (command == 1) name = "RUN";
+    else if (command == 2) name = "BACK";
+    else if (command == 3) name = "REVERSE";
+    else if (command == TAKE_COMMAND) name = "TAKE";
+    else if (command == PUT_COMMAND) name = "PUT";
+    return argument == 0 ? name : TextFormat("%s %i", name, argument);
 }
 
 void DrawPunchedCard(int x, int y, int command, int argument) {
@@ -293,6 +308,18 @@ int main() {
     int speed = 7;
     int score = 0;
     bool inventoryOpen = false;
+    
+    // Игровые локации
+    enum class Location {
+        Workshop,
+        IronMine
+    };
+
+    // Текущая локация игрока
+    Location currentLocation = Location::Workshop;
+    
+    // Открыта ли карта мира
+    bool worldMapOpen = false;
 
     SetTargetFPS(60);
     
@@ -483,11 +510,28 @@ int main() {
         const char* status = "Insert card";
         std::vector<RollerCell> lineCells;
         bool lineBroken = false;
+        int numberedSlotCommand = 0;
+        RollerEnd numberedSlotEnd = {};
     };
     RollerProgram rollerPrograms[ROWS][COLS] = {};
     bool rollerDirectionSet[ROWS][COLS] = {};
     RollerSide rollerEntrySides[ROWS][COLS] = {};
-    int rollerEndSlots[ROWS][COLS][4] = {};
+    struct RollerSlots {
+        unsigned int numbered = 0;
+        bool automatic = false;
+
+        bool configured() const {
+            return automatic || numbered != 0;
+        }
+
+        bool includes(int slot) const {
+            return automatic || (numbered & (1u << (slot - 1))) != 0;
+        }
+    };
+    RollerSlots rollerEndSlots[ROWS][COLS][4] = {};
+    auto getRollerEndSlots = [&](RollerEnd end) -> RollerSlots& {
+        return rollerEndSlots[end.cell.y][end.cell.x][static_cast<int>(end.side)];
+    };
     auto isRollerConnected = [&](int col, int row, RollerSide side) {
         if (col < 0 || col >= COLS || row < 0 || row >= ROWS) {
             return false;
@@ -682,6 +726,18 @@ int main() {
         return getDirectedLine({{col, row}, entrySide});
     };
 
+    auto getRouteEnd = [&](const std::vector<RollerStep>& route, bool source) -> RollerEnd {
+        if (!source) {
+            return {route.back().cell, route.back().exitSide};
+        }
+
+        const RollerStep& first = route.front();
+        return {
+            first.cell,
+            OtherRollerSide(rollerShapes[first.cell.y][first.cell.x], first.exitSide)
+        };
+    };
+
     TileType drillDeposits[ROWS][COLS] = {};
     int durability[ROWS][COLS] = {};
     int resourceAmount[ROWS][COLS] = {};
@@ -854,25 +910,60 @@ int main() {
             type == ItemType::IronPlate;
     };
 
+    auto getRollerEndError = [&](RollerEnd end) -> const char* {
+        const RollerSlots& slots = getRollerEndSlots(end);
+        if (!slots.configured()) {
+            return "SLOT NOT SET";
+        }
+
+        const RollerCell building = NeighborCell(end.cell, end.side);
+        const int slotCount = getBuildingSlotCount(building);
+        if (slotCount == 0) {
+            return "NO BUILDING CONNECTED";
+        }
+
+        if (slots.numbered >= (1u << slotCount) ||
+            (grid[building.y][building.x] != TileType::Chest &&
+             (slots.automatic || std::popcount(slots.numbered) > 1))) {
+            return "INVALID SLOT";
+        }
+
+        return nullptr;
+    };
+
     auto unloadRollerCargo = [&](RollerEnd end) {
         InventorySlot& cargo = rollerCargo[end.cell.y][end.cell.x];
         if (cargo.amount == 0) {
             return false;
         }
 
-        int slotNumber = rollerEndSlots[end.cell.y][end.cell.x]
-                                        [static_cast<int>(end.side)];
-        RollerCell building = NeighborCell(end.cell, end.side);
-        InventorySlot* target = getBuildingSlot(building, slotNumber);
-
-        if (target == nullptr ||
-            (target->amount > 0 && target->type != cargo.type) ||
-            target->amount >= GetMaxStack(cargo.type)) {
+        const RollerSlots& slots = getRollerEndSlots(end);
+        const RollerCell building = NeighborCell(end.cell, end.side);
+        const int slotCount = getBuildingSlotCount(building);
+        if (slotCount == 0) {
             return false;
         }
 
-        if (grid[building.y][building.x] != TileType::Chest &&
-            getAcceptedItem(building, slotNumber) != cargo.type) {
+        const bool isChest = grid[building.y][building.x] == TileType::Chest;
+        InventorySlot* target = nullptr;
+        for (int slot = 1; slot <= slotCount; slot++) {
+            if (!slots.includes(slot) ||
+                (!isChest && getAcceptedItem(building, slot) != cargo.type)) {
+                continue;
+            }
+
+            InventorySlot* candidate = getBuildingSlot(building, slot);
+            if (candidate->amount == 0 && target == nullptr) {
+                target = candidate;
+            }
+            if (candidate->amount > 0 && candidate->type == cargo.type &&
+                candidate->amount < GetMaxStack(cargo.type)) {
+                target = candidate;
+                break;
+            }
+        }
+
+        if (target == nullptr) {
             return false;
         }
 
@@ -888,23 +979,29 @@ int main() {
             return false;
         }
 
-        int slotNumber = rollerEndSlots[end.cell.y][end.cell.x]
-                                        [static_cast<int>(end.side)];
-        RollerCell building = NeighborCell(end.cell, end.side);
-        InventorySlot* source = getBuildingSlot(building, slotNumber);
+        const RollerSlots& slots = getRollerEndSlots(end);
+        const RollerCell building = NeighborCell(end.cell, end.side);
+        const int slotCount = getBuildingSlotCount(building);
+        for (int slot = 1; slot <= slotCount; slot++) {
+            if (!slots.includes(slot)) {
+                continue;
+            }
 
-        if (source == nullptr || source->amount == 0 ||
-            !canCarryOnRoller(source->type)) {
-            return false;
+            InventorySlot& source = *getBuildingSlot(building, slot);
+            if (source.amount == 0 || !canCarryOnRoller(source.type)) {
+                continue;
+            }
+
+            cargo.type = source.type;
+            cargo.amount = 1;
+            source.amount--;
+            if (source.amount == 0) {
+                source = {};
+            }
+            return true;
         }
 
-        cargo.type = source->type;
-        cargo.amount = 1;
-        source->amount--;
-        if (source->amount == 0) {
-            *source = {};
-        }
-        return true;
+        return false;
     };
 
     auto moveLoopCargo = [&](const std::vector<RollerStep>& route) {
@@ -1042,6 +1139,48 @@ int main() {
     bool developerPanelOpen = false;
 
     while (!WindowShouldClose()) {
+        
+        // Переключение между локациями
+        // Возвращение из карты мира
+        if (worldMapOpen && IsKeyPressed(KEY_ESCAPE)) {
+            worldMapOpen = false;
+
+            // Возвращаем игрока в центр территории
+            x = 400;
+            y = 200;
+        }
+        
+        // Выбор локации на карте мира
+        bool locationSelectedThisFrame = false;
+
+        if (worldMapOpen && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+
+            Vector2 mapMouse = GetMousePosition();
+
+            Rectangle workshopButton = {100, 160, 220, 110};
+            Rectangle mineButton = {480, 160, 220, 110};
+
+            if (CheckCollisionPointRec(mapMouse, workshopButton)) {
+
+                currentLocation = Location::Workshop;
+                worldMapOpen = false;
+
+                x = 400;
+                y = 200;
+
+                locationSelectedThisFrame = true;
+            }
+            else if (CheckCollisionPointRec(mapMouse, mineButton)) {
+
+                currentLocation = Location::IronMine;
+                worldMapOpen = false;
+
+                x = 400;
+                y = 200;
+
+                locationSelectedThisFrame = true;
+            }
+        }
 
         Rectangle wall = {500, 150, 100, 50};
         Vector2 mouse = GetMousePosition();
@@ -1053,7 +1192,6 @@ int main() {
         bool canBuild = false;
         int command = 0;
         int argument = 0;
-        const char* commandName = "UNKNOWN";
         int stoneCount = 0;
         int woodCount = 0;
         int plateCount = 0;
@@ -1119,7 +1257,8 @@ int main() {
         }
 
         // На паузе рисуем мир, но не обновляем его состояние.
-        if (!developerPanelOpen && !panelToggled) {
+        if (!developerPanelOpen && !panelToggled &&
+            !worldMapOpen && !locationSelectedThisFrame) {
             bool furnacePlacedThisFrame = false;
             bool drillPlacedThisFrame = false;
             bool rollerPlacedThisFrame = false;
@@ -1148,6 +1287,17 @@ int main() {
 
             if (y < 0) y = 0;
             if (y > 410) y = 410;
+            
+            // Выход за границу любой локации
+            bool leaving =
+                (x == 0 && IsKeyDown(KEY_LEFT)) ||
+                (x == 760 && IsKeyDown(KEY_RIGHT)) ||
+                (y == 0 && IsKeyDown(KEY_UP)) ||
+                (y == 410 && IsKeyDown(KEY_DOWN));
+
+            if (leaving) {
+                worldMapOpen = true;
+            }
 
             player = {(float)x, (float)y, 40, 40};
 
@@ -1347,7 +1497,7 @@ int main() {
                         rollerCargo[cellY][cellX] = {};
                         rollerPrograms[cellY][cellX] = {};
                         for (int side = 0; side < 4; side++) {
-                            rollerEndSlots[cellY][cellX][side] = 0;
+                            rollerEndSlots[cellY][cellX][side] = {};
                         }
                         inventory[i].amount--;
                         if (inventory[i].amount == 0) {
@@ -1456,7 +1606,7 @@ int main() {
                             rollerCargo[cellY][cellX] = {};
                             rollerPrograms[cellY][cellX] = {};
                             for (int side = 0; side < 4; side++) {
-                                rollerEndSlots[cellY][cellX][side] = 0;
+                                rollerEndSlots[cellY][cellX][side] = {};
                             }
                             grid[cellY][cellX] = TileType::Empty;
                             rollerShapes[cellY][cellX] = 0;
@@ -1817,14 +1967,10 @@ int main() {
                 }
             }
 
-            if (command == 1) commandName = "RUN";
-            else if (command == 2) commandName = "BACK";
-            else if (command == 3) commandName = "REVERSE";
-            else if (command == 4) commandName = "SLOT";
-
             validPattern =
-                ((command == 1 || command == 2 || command == 4) && argument > 0) ||
-                (command == 3 && argument == 0);
+                ((command == 1 || command == 2) && argument > 0) ||
+                (command == 3 && argument == 0) ||
+                command == TAKE_COMMAND || command == PUT_COMMAND;
 
             // Закрываем окно постройки вместе с инвентарём.
             if (!inventoryOpen) {
@@ -2089,6 +2235,7 @@ int main() {
                             program.completedActions = 0;
                             program.cardIndex = 0;
                             program.commandTimer = 0.0f;
+                            program.numberedSlotCommand = 0;
                             program.status = "Insert card";
                             source = {};
                             selectedSlot = -1;
@@ -2105,6 +2252,7 @@ int main() {
                         if (freeSlot != -1) {
                             inventory[freeSlot] = reader;
                             reader = {};
+                            rollerPrograms[openedRollerY][openedRollerX].numberedSlotCommand = 0;
                         }
                         else {
                             inventoryFullTimer = 1.0f;
@@ -2914,11 +3062,18 @@ int main() {
                         continue;
                     }
                     if (program.cardIndex >= (int)reader.cards.size()) {
+                        program.numberedSlotCommand = 0;
                         program.status = "Done";
                         continue;
                     }
                     const CardInstruction& instruction =
                         reader.cards[program.cardIndex];
+                    const bool configuringSlots = instruction.command == TAKE_COMMAND ||
+                        instruction.command == PUT_COMMAND;
+                    if (!configuringSlots) {
+                        program.numberedSlotCommand = 0;
+                    }
+
                     if (instruction.command == 1) {
                         bool isLoop = line.ends.empty();
 
@@ -2932,51 +3087,14 @@ int main() {
                         RollerEnd targetEnd = {};
 
                         if (!isLoop) {
-                            RollerCell firstCell = route.front().cell;
-                            sourceEnd = {
-                                firstCell,
-                                OtherRollerSide(
-                                    rollerShapes[firstCell.y][firstCell.x],
-                                    route.front().exitSide
-                                )
-                            };
-                            targetEnd = {
-                                route.back().cell,
-                                route.back().exitSide
-                            };
-                        }
-
-                        if (!isLoop) {
-                            bool connectionError = false;
-                            const RollerEnd ends[] = {sourceEnd, targetEnd};
-
-                            for (const RollerEnd& end : ends) {
-                                int slotNumber =
-                                    rollerEndSlots[end.cell.y][end.cell.x]
-                                                  [static_cast<int>(end.side)];
-                                if (slotNumber == 0) {
-                                    program.status = "SLOT NOT SET";
-                                    connectionError = true;
-                                    break;
-                                }
-
-                                RollerCell building = NeighborCell(
-                                    end.cell, end.side
-                                );
-                                int slotCount = getBuildingSlotCount(building);
-                                if (slotCount == 0) {
-                                    program.status = "NO BUILDING CONNECTED";
-                                    connectionError = true;
-                                    break;
-                                }
-                                if (slotNumber > slotCount) {
-                                    program.status = "INVALID SLOT";
-                                    connectionError = true;
-                                    break;
-                                }
+                            sourceEnd = getRouteEnd(route, true);
+                            targetEnd = getRouteEnd(route, false);
+                            const char* connectionError = getRollerEndError(sourceEnd);
+                            if (connectionError == nullptr) {
+                                connectionError = getRollerEndError(targetEnd);
                             }
-
-                            if (connectionError) {
+                            if (connectionError != nullptr) {
+                                program.status = connectionError;
                                 continue;
                             }
                         }
@@ -3070,8 +3188,9 @@ int main() {
                         program.commandTimer = 0.0f;
                         continue;
                     }
-                    if (instruction.command == 4) {
-                        program.status = "Reading SLOT";
+                    if (configuringSlots) {
+                        const bool taking = instruction.command == TAKE_COMMAND;
+                        program.status = taking ? "Reading TAKE" : "Reading PUT";
                         program.commandTimer += GetFrameTime();
 
                         if (program.commandTimer < 0.2f) {
@@ -3088,33 +3207,49 @@ int main() {
                             continue;
                         }
 
-                        RollerEnd activeEnd = {
-                            route.back().cell,
-                            route.back().exitSide
-                        };
-                        RollerCell building = NeighborCell(
-                            activeEnd.cell, activeEnd.side
-                        );
-                        int slotCount = getBuildingSlotCount(building);
-
+                        const RollerEnd end = getRouteEnd(route, taking);
+                        const RollerCell building = NeighborCell(end.cell, end.side);
+                        const int slotCount = getBuildingSlotCount(building);
                         if (slotCount == 0) {
                             program.status = "NO BUILDING CONNECTED";
                             continue;
                         }
-                        if (instruction.argument > slotCount) {
+
+                        const bool isChest = grid[building.y][building.x] == TileType::Chest;
+                        const bool automatic = instruction.argument == 0;
+                        if (instruction.argument > slotCount || (automatic && !isChest)) {
                             program.status = "INVALID SLOT";
                             continue;
                         }
 
-                        rollerEndSlots[activeEnd.cell.y][activeEnd.cell.x]
-                                      [static_cast<int>(activeEnd.side)] =
-                            instruction.argument;
+                        RollerSlots& slots = getRollerEndSlots(end);
+                        const RollerEnd previous = program.numberedSlotEnd;
+                        const bool continuingSeries = isChest && !automatic &&
+                            program.numberedSlotCommand == instruction.command &&
+                            previous.cell.x == end.cell.x && previous.cell.y == end.cell.y &&
+                            previous.side == end.side;
+                        if (!continuingSeries) {
+                            slots = {};
+                        }
+                        if (automatic) {
+                            slots.automatic = true;
+                        }
+                        else {
+                            slots.numbered |= 1u << (instruction.argument - 1);
+                        }
+                        program.numberedSlotCommand = isChest && !automatic
+                            ? instruction.command : 0;
+                        program.numberedSlotEnd = end;
 
                         program.commandTimer = 0.0f;
                         program.cardIndex++;
                         program.status =
                             program.cardIndex >= (int)reader.cards.size()
                             ? "Done" : "Next card";
+                        continue;
+                    }
+                    if (instruction.command != 3) {
+                        program.status = "UNSUPPORTED COMMAND";
                         continue;
                     }
                     program.status = "Reading REVERSE";
@@ -3365,14 +3500,26 @@ int main() {
                 }
 
                 DrawCircle(edgeX, edgeY, 3, ORANGE);
-                int slotNumber =
-                    rollerEndSlots[end.cell.y][end.cell.x]
-                                  [static_cast<int>(end.side)];
-                if (slotNumber > 0) {
-                    DrawText(
-                        TextFormat("%i", slotNumber),
-                        edgeX + 5, edgeY - 10, 14, DARKBLUE
-                    );
+                const RollerSlots& slots = getRollerEndSlots(end);
+                std::string label;
+                if (slots.automatic) {
+                    label = "AUTO";
+                }
+                else {
+                    for (int slot = 1; slot <= CHEST_SIZE; slot++) {
+                        if (slots.includes(slot)) {
+                            if (!label.empty()) {
+                                label += ',';
+                            }
+                            label += (char)('0' + slot);
+                        }
+                    }
+                }
+                if (!label.empty()) {
+                    const int labelX = end.side == RollerSide::Left
+                        ? edgeX - MeasureText(label.c_str(), 14) - 5 : edgeX + 5;
+                    const int labelY = end.side == RollerSide::Down ? edgeY + 4 : edgeY - 14;
+                    DrawText(label.c_str(), labelX, labelY, 14, DARKBLUE);
                 }
             }
 
@@ -3431,6 +3578,17 @@ int main() {
         }
         
         DrawText(TextFormat("Score: %i", score), 10, 10, 20, BLACK);
+        
+        // Название текущей локации
+        const char* locationName =
+            currentLocation == Location::Workshop
+            ? "WORKSHOP"
+            : "IRON MINE";
+
+        DrawText(
+            TextFormat("Location: %s", locationName),
+            560, 10, 16, DARKBLUE
+        );
         
         int ironCount = 0;
 
@@ -3764,14 +3922,7 @@ int main() {
                     DrawText("Insert card", 35, 375, 16, LIGHTGRAY);
                 }
                 else {
-                    const char* name = "UNKNOWN";
-                    if (shownCard->command == 1) name = "RUN";
-                    else if (shownCard->command == 2) name = "BACK";
-                    else if (shownCard->command == 3) name = "REVERSE";
-                    else if (shownCard->command == 4) name = "SLOT";
-
-                    const char* label = shownCard->command == 3
-                        ? name : TextFormat("%s %i", name, shownCard->argument);
+                    const char* label = FormatCardCommand(shownCard->command, shownCard->argument);
                     DrawText(label, 35, 375, 18, GOLD);
                 }
             }
@@ -3871,14 +4022,7 @@ int main() {
                     DrawText("Insert card", 35, 375, 16, LIGHTGRAY);
                 }
                 else {
-                    const char* name = "UNKNOWN";
-                    if (shownCard->command == 1) name = "RUN";
-                    else if (shownCard->command == 2) name = "BACK";
-                    else if (shownCard->command == 3) name = "REVERSE";
-                    else if (shownCard->command == 4) name = "SLOT";
-
-                    const char* label = shownCard->command == 3
-                        ? name : TextFormat("%s %i", name, shownCard->argument);
+                    const char* label = FormatCardCommand(shownCard->command, shownCard->argument);
                     DrawText(label, 35, 375, 18, GOLD);
                 }
             }
@@ -4177,19 +4321,10 @@ int main() {
                         for (int row = 0; row < visibleCount; row++) {
                             int index = previewOffset + row;
                             const CardInstruction& instruction = cards[index];
-                            const char* name = "UNKNOWN";
-                            if (instruction.command == 1) name = "RUN";
-                            else if (instruction.command == 2) name = "BACK";
-                            else if (instruction.command == 3) name = "REVERSE";
-                            else if (instruction.command == 4) name = "SLOT";
-
-                            const char* line = instruction.command == 3
-                                ? TextFormat("%i. %s", index + 1, name)
-                                : TextFormat(
-                                    "%i. %s %i", index + 1, name, instruction.argument
-                                );
+                            const std::string line = std::to_string(index + 1) + ". " +
+                                FormatCardCommand(instruction.command, instruction.argument);
                             DrawText(
-                                line,
+                                line.c_str(),
                                 tooltipX + 10, tooltipY + 34 + row * 24,
                                 18, WHITE
                             );
@@ -4241,14 +4376,8 @@ int main() {
                         itemName = "Blank Card";
                     }
                     else if (inventory[i].type == ItemType::PunchedCard) {
-                        const char* name = "UNKNOWN";
-                        if (inventory[i].cards.front().command == 1) name = "RUN";
-                        else if (inventory[i].cards.front().command == 2) name = "BACK";
-                        else if (inventory[i].cards.front().command == 3) name = "REVERSE";
-                        else if (inventory[i].cards.front().command == 4) name = "SLOT";
-
-                        itemName = inventory[i].cards.front().command == 3
-                            ? name : TextFormat("%s %i", name, inventory[i].cards.front().argument);
+                        const CardInstruction& card = inventory[i].cards.front();
+                        itemName = FormatCardCommand(card.command, card.argument);
                     }
 
                     // Размер подсказки
@@ -4346,7 +4475,7 @@ int main() {
             DrawRectangle(160, 35, 480, 405, DARKGRAY);
             DrawText("Card Puncher", 185, 50, 24, WHITE);
             DrawText("RUN 0001   BACK 0010", 185, 85, 18, LIGHTGRAY);
-            DrawText("REVERSE 0011   SLOT 0100", 185, 110, 18, LIGHTGRAY);
+            DrawText("REVERSE 0011   TAKE 0100   PUT 0101", 185, 110, 18, LIGHTGRAY);
 
             for (int row = 0; row < 2; row++) {
                 for (int i = 0; i < 4; i++) {
@@ -4367,21 +4496,19 @@ int main() {
                 }
             }
 
-            const char* preview = command == 3
-                ? commandName
-                : TextFormat("%s %i", commandName, argument);
+            const char* preview = FormatCardCommand(command, argument);
             DrawText(preview, 185, 325, 24, validPattern ? GREEN : RED);
             const char* error = "";
             if (!hasBlank) {
                 error = "NO BLANK CARD";
             }
-            else if (command < 1 || command > 4) {
+            else if (command < 1 || command > PUT_COMMAND) {
                 error = "UNKNOWN COMMAND";
             }
             else if (command == 3 && argument != 0) {
                 error = "REVERSE NEEDS NO ARGUMENT";
             }
-            else if (command != 3 && argument == 0) {
+            else if ((command == 1 || command == 2) && argument == 0) {
                 error = "ARGUMENT REQUIRED";
             }
             else if (punchedCardSlot == -1) {
@@ -4436,6 +4563,32 @@ int main() {
             if (inventoryFullTimer > 0.0f) {
                 DrawText("INVENTORY FULL", 145, 365, 20, RED);
             }
+        }
+        
+        // Экран карты мира
+        if (worldMapOpen) {
+
+            DrawRectangle(0, 0, 800, 450, DARKBROWN);
+
+            DrawText(
+                "WORLD MAP",
+                300, 40, 32, WHITE
+            );
+
+            // Мастерская
+            DrawRectangle(100, 160, 220, 110, BROWN);
+            DrawRectangleLines(100, 160, 220, 110, WHITE);
+            DrawText("WORKSHOP", 135, 200, 24, WHITE);
+
+            // Железная шахта
+            DrawRectangle(480, 160, 220, 110, GRAY);
+            DrawRectangleLines(480, 160, 220, 110, WHITE);
+            DrawText("IRON MINE", 515, 200, 24, WHITE);
+
+            DrawText(
+                "ESC - RETURN",
+                310, 375, 20, WHITE
+            );
         }
 
         EndDrawing();
