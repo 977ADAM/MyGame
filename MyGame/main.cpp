@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <random>
+#include <array>
 
 // Типы предметов
 enum class ItemType {
@@ -581,6 +583,125 @@ int main() {
     const int INVENTORY_SIZE = 20;
 
     InventorySlot inventory[INVENTORY_SIZE] = {};
+
+    // ==========================================
+    // ECONOMY — Деньги и процедурные контракты
+    // ==========================================
+    long long money = 0;
+    int completedContracts = 0;
+    bool contractsOpen = false;
+    constexpr float CONTRACT_REFRESH_TIME = 90.0f;
+    float contractRefresh = CONTRACT_REFRESH_TIME;
+    int nextContractId = 1;
+    std::mt19937 contractRng(std::random_device{}());
+    auto randomInt = [&](int low, int high) {
+        return std::uniform_int_distribution<int>(low, high)(contractRng);
+    };
+    struct ContractProduct {
+        ItemType type;
+        const char* name;
+        int minAmount, maxAmount, unitPrice;
+        bool equipment;
+    };
+    // Только предметы, доступные в текущем прототипе.
+    const ContractProduct contractProducts[] = {
+        {ItemType::IronOre, "Iron ore", 5, 25, 3, false},
+        {ItemType::Coal, "Coal", 5, 30, 2, false},
+        {ItemType::IronPlate, "Iron plates", 3, 12, 8, false},
+        {ItemType::Wood, "Wood", 1, 4, 5, false},
+        {ItemType::Stone, "Stone", 1, 2, 8, false},
+        {ItemType::Furnace, "Furnaces", 1, 1, 35, true},
+        {ItemType::Drill, "Drills", 1, 3, 40, true},
+        {ItemType::Roller, "Rollers", 1, 4, 18, true},
+        {ItemType::Chest, "Chests", 1, 2, 25, true},
+        {ItemType::BlankCard, "Blank cards", 1, 4, 8, true}
+    };
+    const char* contractClients[] = {
+        "Royal Railway Company", "Manchester Steel Works",
+        "London Mechanical Works", "British Mining Company",
+        "Babbage Engineering"
+    };
+    struct Contract {
+        int id = 0;
+        int productIndex = 0;
+        int clientIndex = 0;
+        int required = 0;
+        int delivered = 0;
+        int reward = 0;
+        bool accepted = false;
+    };
+    std::array<Contract, 3> contracts{};
+    auto generateContract = [&](int index) {
+        // В первой строке — ресурс, во второй — изделие,
+        // третья строка выбирает любую категорию.
+        const int productIndex = index == 0 ? randomInt(0, 4) :
+            (index == 1 ? randomInt(5, 9) : randomInt(0, 9));
+        const ContractProduct& product = contractProducts[productIndex];
+        Contract c;
+        c.id = nextContractId++;
+        c.productIndex = productIndex;
+        c.clientIndex = randomInt(0, 4);
+        c.required = randomInt(product.minAmount, product.maxAmount);
+        c.reward = std::max(1, c.required * product.unitPrice * randomInt(90, 125) / 100);
+        contracts[index] = c;
+    };
+    for (int i = 0; i < (int)contracts.size(); ++i) generateContract(i);
+
+    auto contractInventoryAmount = [&](ItemType type) {
+        int total = 0;
+        for (const InventorySlot& slot : inventory) {
+            if (slot.type == type) total += slot.amount;
+        }
+        return total;
+    };
+    auto acceptContract = [&](int index) {
+        if (!contracts[index].accepted) contracts[index].accepted = true;
+    };
+    std::string contractNotice = "Choose an offer to begin.";
+    auto deliverContract = [&](int index) {
+        Contract& c = contracts[index];
+        if (!c.accepted) return 0;
+        const ItemType type = contractProducts[c.productIndex].type;
+        int remaining = c.required - c.delivered;
+        int deliveredNow = 0;
+        for (InventorySlot& slot : inventory) {
+            if (remaining <= 0) break;
+            if (slot.type != type || slot.amount <= 0) continue;
+            const int take = std::min(remaining, slot.amount);
+            slot.amount -= take;
+            remaining -= take;
+            deliveredNow += take;
+            if (slot.amount == 0) slot = {};
+        }
+        c.delivered += deliveredNow;
+        if (c.delivered == c.required) {
+            money += c.reward;
+            ++completedContracts;
+            contractNotice = "Completed #" + std::to_string(c.id) +
+                ": +GBP " + std::to_string(c.reward);
+            generateContract(index);
+        } else if (deliveredNow > 0) {
+            contractNotice = "Delivered " + std::to_string(deliveredNow) + " units.";
+        } else {
+            contractNotice = "No matching goods in inventory.";
+        }
+        return deliveredNow;
+    };
+    auto refreshContracts = [&](float dt) {
+        contractRefresh -= dt;
+        if (contractRefresh > 0.0f) return;
+        contractRefresh = CONTRACT_REFRESH_TIME;
+        for (int i = 0; i < (int)contracts.size(); ++i) {
+            if (!contracts[i].accepted) generateContract(i);
+        }
+    };
+    auto contractActionRect = [](int index) -> Rectangle {
+        return {548, (float)(116 + index * 92), 200, 30};
+    };
+    auto contractAbandonRect = [](int index) -> Rectangle {
+        return {548, (float)(150 + index * 92), 200, 24};
+    };
+
     
     int selectedSlot = -1;
     int previewSlot = -1;
@@ -2086,7 +2207,42 @@ int main() {
         // Сохраняем блокировку до конца кадра отмены или выбора.
         bool directionInputBlocked = choosingControllerX != -1;
         bool directionSelectionStartedThisFrame = false;
-        bool panelToggled = IsKeyPressed(KEY_F1);
+        // Биржа доступна в мастерской. Модальное окно не пропускает
+        // нажатия мыши и клавиш в игровую карту.
+        bool contractToggled = false;
+        if (contractsOpen && (IsKeyPressed(KEY_B) || IsKeyPressed(KEY_ESCAPE))) {
+            contractsOpen = false;
+            contractToggled = true;
+        } else if (!contractsOpen && currentLocation == Location::Workshop &&
+                   !worldMapOpen && !inventoryOpen && !puncherOpen &&
+                   !developerPanelOpen && !directionInputBlocked &&
+                   !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
+                   IsKeyPressed(KEY_B)) {
+            closeLocationUI();
+            contractsOpen = true;
+            contractToggled = true;
+        }
+        bool panelToggled = !contractsOpen && !contractToggled && IsKeyPressed(KEY_F1);
+        if (contractsOpen && !contractToggled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            for (int i = 0; i < (int)contracts.size(); ++i) {
+                if (CheckCollisionPointRec(mouse, contractActionRect(i))) {
+                    if (!contracts[i].accepted) {
+                        acceptContract(i);
+                        contractNotice = "Accepted #" + std::to_string(contracts[i].id);
+                    } else {
+                        deliverContract(i);
+                    }
+                    break;
+                }
+                if (contracts[i].accepted && contracts[i].delivered == 0 &&
+                    CheckCollisionPointRec(mouse, contractAbandonRect(i))) {
+                    generateContract(i);
+                    contractNotice = "Order abandoned. New offer available.";
+                    break;
+                }
+            }
+        }
+        if (!developerPanelOpen && !panelToggled) refreshContracts(GetFrameTime());
         if (panelToggled) {
             developerPanelOpen = !developerPanelOpen;
             if (developerPanelOpen) {
@@ -2132,7 +2288,8 @@ int main() {
 
         // На паузе рисуем мир, но не обновляем его состояние.
         if (!developerPanelOpen && !panelToggled &&
-            !worldMapOpen && !locationSelectedThisFrame) {
+            !worldMapOpen && !locationSelectedThisFrame &&
+            !contractsOpen && !contractToggled) {
             
             
             // ==========================================
@@ -4037,6 +4194,10 @@ int main() {
         }
         
         DrawText(TextFormat("Score: %i", score), 10, 10, 20, BLACK);
+        DrawText(TextFormat("Money: GBP %lld", money), 10, 60, 18, DARKGREEN);
+        if (currentLocation == Location::Workshop) {
+            DrawText("B - CONTRACTS", 10, 82, 16, DARKBLUE);
+        }
         
         
         // Склад активной территории и краткий статус перевозок.
@@ -5095,6 +5256,37 @@ int main() {
             DrawText(autoCargoDelivery ? "A - AUTO: ON (ALL ROUTES)" : "A - AUTO: OFF (ALL ROUTES)", 30, 335, 19, autoCargoDelivery ? GREEN : YELLOW);
             DrawText("10 units / 5 seconds per route", 30, 365, 17, WHITE);
             DrawText("ESC - RETURN", 590, 395, 20, WHITE);
+        }
+
+        // Биржа рисуется поверх мира. Производство и доставка продолжаются.
+        if (contractsOpen) {
+            DrawRectangle(0, 0, 800, 450, Color{43, 35, 29, 255});
+            DrawText("INDUSTRIAL EXCHANGE", 28, 15, 28, GOLD);
+            DrawText(TextFormat("GBP %lld | Completed: %i", money, completedContracts), 460, 22, 17, WHITE);
+            DrawText(TextFormat("New offers in %is | Accepted orders stay", (int)(contractRefresh + 0.999f)), 28, 56, 17, LIGHTGRAY);
+            for (int i = 0; i < (int)contracts.size(); ++i) {
+                const Contract& c = contracts[i];
+                const ContractProduct& product = contractProducts[c.productIndex];
+                const int y = 98 + i * 92;
+                DrawRectangle(24, y, 752, 86, DARKGRAY);
+                DrawRectangleLines(24, y, 752, 86, c.accepted ? GREEN : GRAY);
+                DrawText(TextFormat("#%i  %s", c.id, contractClients[c.clientIndex]), 38, y + 7, 17, WHITE);
+                DrawText(TextFormat("%s | %s: %i", product.equipment ? "GOODS" : "MATERIALS", product.name, c.required), 38, y + 29, 18, GOLD);
+                DrawText(TextFormat("Delivered: %i/%i | Inventory: %i", c.delivered, c.required, contractInventoryAmount(product.type)), 38, y + 51, 15, LIGHTGRAY);
+                DrawText(TextFormat("GBP %i", c.reward), 411, y + 31, 18, GREEN);
+                Rectangle action = contractActionRect(i);
+                const bool enabled = !c.accepted || contractInventoryAmount(product.type) > 0;
+                DrawRectangleRec(action, enabled ? DARKGREEN : GRAY);
+                DrawRectangleLinesEx(action, 1, WHITE);
+                DrawText(c.accepted ? "DELIVER GOODS" : "ACCEPT ORDER", 560, (int)action.y + 7, 16, WHITE);
+                if (c.accepted && c.delivered == 0) {
+                    Rectangle abandon = contractAbandonRect(i);
+                    DrawRectangleRec(abandon, MAROON);
+                    DrawText("ABANDON", 560, (int)abandon.y + 4, 14, WHITE);
+                }
+            }
+            DrawText(contractNotice.c_str(), 28, 385, 16, YELLOW);
+            DrawText("Inventory deliveries | Payment on completion | B / ESC: Close", 28, 417, 16, WHITE);
         }
 
         EndDrawing();
