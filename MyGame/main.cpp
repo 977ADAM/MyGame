@@ -315,7 +315,8 @@ int main() {
     // Игровые локации
     enum class Location {
         Workshop,
-        IronMine
+        IronMine,
+        CoalMine
     };
 
     // Текущая локация игрока
@@ -378,6 +379,49 @@ int main() {
         workshopCargoIron += delivered;
         cargoInTransit -= delivered;
         // Если места не хватило, остаток ждёт разгрузки в пути.
+    };
+
+    // Уголь: отдельный склад отправления и два склада назначения.
+    const int COAL_CARGO_CAPACITY = 200;
+    int coalMineCargo = 0;
+    int workshopCargoCoal = 0;
+    int ironMineCargoCoal = 0;
+    struct CoalRoute {
+        int inTransit = 0;
+        float remaining = 0.0f;
+    };
+    CoalRoute coalToWorkshop, coalToIronMine;
+    bool preferIronMine = false;
+    auto dispatchCoal = [&](CoalRoute& route, int destination, bool fullBatchOnly) {
+        if (route.inTransit > 0) return false;
+        int amount = std::min({CARGO_BATCH_SIZE, coalMineCargo,
+            COAL_CARGO_CAPACITY - destination});
+        if (amount <= 0 || (fullBatchOnly && amount < CARGO_BATCH_SIZE)) return false;
+        coalMineCargo -= amount;
+        route.inTransit = amount;
+        route.remaining = CARGO_TRAVEL_TIME;
+        return true;
+    };
+    auto updateCoal = [&](CoalRoute& route, int& destination, float dt) {
+        if (route.inTransit <= 0) return;
+        route.remaining = std::max(0.0f, route.remaining - dt);
+        if (route.remaining > 0.0f) return;
+        int delivered = std::min(route.inTransit,
+            std::max(0, COAL_CARGO_CAPACITY - destination));
+        destination += delivered;
+        route.inTransit -= delivered;
+    };
+    auto dispatchAutoCoal = [&]() {
+        // Чередуем приоритет, чтобы при малом запасе не голодал второй маршрут.
+        bool sent = false;
+        if (preferIronMine) {
+            sent = dispatchCoal(coalToIronMine, ironMineCargoCoal, true);
+            sent = dispatchCoal(coalToWorkshop, workshopCargoCoal, true) || sent;
+        } else {
+            sent = dispatchCoal(coalToWorkshop, workshopCargoCoal, true);
+            sent = dispatchCoal(coalToIronMine, ironMineCargoCoal, true) || sent;
+        }
+        if (sent) preferIronMine = !preferIronMine;
     };
 
     SetTargetFPS(60);
@@ -834,6 +878,17 @@ int main() {
         }
     }
 
+    static TileType coalMineGrid[ROWS][COLS] = {};
+    static int coalMineDurability[ROWS][COLS] = {};
+    static int coalMineResourceAmount[ROWS][COLS] = {};
+    for (int row = 6; row <= 12; ++row) {
+        for (int col = 10; col <= 17; ++col) {
+            coalMineGrid[row][col] = TileType::Coal;
+            coalMineDurability[row][col] = 2;
+            coalMineResourceAmount[row][col] = 20;
+        }
+    }
+
     auto isLargeBuilding = [](TileType tile) {
         return tile == TileType::Furnace || tile == TileType::Drill || tile == TileType::Chest;
     };
@@ -956,6 +1011,22 @@ int main() {
     // Сундуки
     static ChestStorage ironMineChests[ROWS][COLS] = {};
 
+    // Независимые механизмы угольной шахты.
+    static RollerCell coalMineBuildingOrigins[ROWS][COLS] = {};
+    static int coalMineRollerShapes[ROWS][COLS] = {};
+    static bool coalMineRollerControllers[ROWS][COLS] = {};
+    static InventorySlot coalMineRollerFuel[ROWS][COLS] = {};
+    static InventorySlot coalMineRollerReaders[ROWS][COLS] = {};
+    static InventorySlot coalMineRollerCargo[ROWS][COLS] = {};
+    static RollerProgram coalMineRollerPrograms[ROWS][COLS] = {};
+    static bool coalMineRollerDirectionSet[ROWS][COLS] = {};
+    static RollerSide coalMineRollerEntrySides[ROWS][COLS] = {};
+    static RollerSlots coalMineRollerEndSlots[ROWS][COLS][4] = {};
+    static TileType coalMineDrillDeposits[ROWS][COLS] = {};
+    static DrillStorage coalMineDrills[ROWS][COLS] = {};
+    static FurnaceStorage coalMineFurnaces[ROWS][COLS] = {};
+    static ChestStorage coalMineChests[ROWS][COLS] = {};
+
     auto getBuildingSlotCount = [&](RollerCell cell) {
         if (cell.x < 0 || cell.x >= COLS ||
             cell.y < 0 || cell.y >= ROWS) {
@@ -972,7 +1043,7 @@ int main() {
             return CHEST_SIZE;
         }
         if (grid[cell.y][cell.x] == TileType::CargoStation) {
-            return 1;
+            return currentLocation == Location::CoalMine ? 1 : 2;
         }
 
         return 0;
@@ -1075,16 +1146,21 @@ int main() {
             return false;
         }
 
-        // Станция шахты принимает железную руду через слот 1.
+        // Слот 1 принимает добытый ресурс своей шахты.
         if (grid[building.y][building.x] == TileType::CargoStation) {
-            if (currentLocation != Location::IronMine ||
-                !slots.includes(1) ||
-                cargo.type != ItemType::IronOre ||
-                mineCargoIron >= MINE_CARGO_CAPACITY) {
-                return false;
+            if (!slots.includes(1)) return false;
+            int* stock = nullptr;
+            int capacity = 0;
+            if (currentLocation == Location::IronMine && cargo.type == ItemType::IronOre) {
+                stock = &mineCargoIron;
+                capacity = MINE_CARGO_CAPACITY;
+            } else if (currentLocation == Location::CoalMine && cargo.type == ItemType::Coal) {
+                stock = &coalMineCargo;
+                capacity = COAL_CARGO_CAPACITY;
             }
-            mineCargoIron++;
-            cargo = {};
+            if (!stock || *stock >= capacity) return false;
+            ++*stock;
+            if (--cargo.amount == 0) cargo = {};
             return true;
         }
 
@@ -1127,17 +1203,25 @@ int main() {
         const RollerCell building = NeighborCell(end.cell, end.side);
         const int slotCount = getBuildingSlotCount(building);
 
-        // Станция мастерской выдаёт железную руду через слот 1.
-        if (slotCount > 0 &&
-            grid[building.y][building.x] == TileType::CargoStation) {
-            if (currentLocation != Location::Workshop ||
-                !slots.includes(1) ||
-                workshopCargoIron <= 0) {
-                return false;
+        // Мастерская: слот 1 — железо, слот 2 — уголь.
+        // Железная шахта: слот 2 выдаёт привезённый уголь.
+        if (slotCount > 0 && grid[building.y][building.x] == TileType::CargoStation) {
+            int* stock = nullptr;
+            ItemType type = ItemType::Empty;
+            if (currentLocation == Location::Workshop && slots.includes(1)) {
+                stock = &workshopCargoIron;
+                type = ItemType::IronOre;
+            } else if (currentLocation == Location::Workshop && slots.includes(2)) {
+                stock = &workshopCargoCoal;
+                type = ItemType::Coal;
+            } else if (currentLocation == Location::IronMine && slots.includes(2)) {
+                stock = &ironMineCargoCoal;
+                type = ItemType::Coal;
             }
-            cargo.type = ItemType::IronOre;
+            if (!stock || *stock <= 0) return false;
+            cargo.type = type;
             cargo.amount = 1;
-            workshopCargoIron--;
+            --*stock;
             return true;
         }
 
@@ -1222,6 +1306,7 @@ int main() {
         for (int col = 34; col < 37; col++) {
             grid[row][col] = TileType::CargoStation;
             ironMineGrid[row][col] = TileType::CargoStation;
+            coalMineGrid[row][col] = TileType::CargoStation;
         }
     }
 
@@ -1319,33 +1404,34 @@ int main() {
         }
 
         const bool inMine = destination == Location::IronMine;
+        const bool inCoal = destination == Location::CoalMine;
 
         // Карта и ресурсы
-        grid = inMine ? ironMineGrid : workshopGrid;
-        durability = inMine ? ironMineDurability : workshopDurability;
-        resourceAmount = inMine ? ironMineResourceAmount : workshopResourceAmount;
+        grid = inCoal ? coalMineGrid : (inMine ? ironMineGrid : workshopGrid);
+        durability = inCoal ? coalMineDurability : (inMine ? ironMineDurability : workshopDurability);
+        resourceAmount = inCoal ? coalMineResourceAmount : (inMine ? ironMineResourceAmount : workshopResourceAmount);
 
         // Крупные постройки
-        buildingOrigins = inMine ? ironMineBuildingOrigins : workshopBuildingOrigins;
+        buildingOrigins = inCoal ? coalMineBuildingOrigins : (inMine ? ironMineBuildingOrigins : workshopBuildingOrigins);
 
         // Роликовые линии
-        rollerShapes = inMine ? ironMineRollerShapes : workshopRollerShapes;
-        rollerControllers = inMine ? ironMineRollerControllers : workshopRollerControllers;
-        rollerFuel = inMine ? ironMineRollerFuel : workshopRollerFuel;
-        rollerReaders = inMine ? ironMineRollerReaders : workshopRollerReaders;
-        rollerCargo = inMine ? ironMineRollerCargo : workshopRollerCargo;
-        rollerPrograms = inMine ? ironMineRollerPrograms : workshopRollerPrograms;
-        rollerDirectionSet = inMine ? ironMineRollerDirectionSet : workshopRollerDirectionSet;
-        rollerEntrySides = inMine ? ironMineRollerEntrySides : workshopRollerEntrySides;
-        rollerEndSlots = inMine ? ironMineRollerEndSlots : workshopRollerEndSlots;
+        rollerShapes = inCoal ? coalMineRollerShapes : (inMine ? ironMineRollerShapes : workshopRollerShapes);
+        rollerControllers = inCoal ? coalMineRollerControllers : (inMine ? ironMineRollerControllers : workshopRollerControllers);
+        rollerFuel = inCoal ? coalMineRollerFuel : (inMine ? ironMineRollerFuel : workshopRollerFuel);
+        rollerReaders = inCoal ? coalMineRollerReaders : (inMine ? ironMineRollerReaders : workshopRollerReaders);
+        rollerCargo = inCoal ? coalMineRollerCargo : (inMine ? ironMineRollerCargo : workshopRollerCargo);
+        rollerPrograms = inCoal ? coalMineRollerPrograms : (inMine ? ironMineRollerPrograms : workshopRollerPrograms);
+        rollerDirectionSet = inCoal ? coalMineRollerDirectionSet : (inMine ? ironMineRollerDirectionSet : workshopRollerDirectionSet);
+        rollerEntrySides = inCoal ? coalMineRollerEntrySides : (inMine ? ironMineRollerEntrySides : workshopRollerEntrySides);
+        rollerEndSlots = inCoal ? coalMineRollerEndSlots : (inMine ? ironMineRollerEndSlots : workshopRollerEndSlots);
 
         // Месторождения под бурами
-        drillDeposits = inMine ? ironMineDrillDeposits : workshopDrillDeposits;
+        drillDeposits = inCoal ? coalMineDrillDeposits : (inMine ? ironMineDrillDeposits : workshopDrillDeposits);
 
         // Производственные механизмы
-        drills = inMine ? ironMineDrills : workshopDrills;
-        furnaces = inMine ? ironMineFurnaces : workshopFurnaces;
-        chests = inMine ? ironMineChests : workshopChests;
+        drills = inCoal ? coalMineDrills : (inMine ? ironMineDrills : workshopDrills);
+        furnaces = inCoal ? coalMineFurnaces : (inMine ? ironMineFurnaces : workshopFurnaces);
+        chests = inCoal ? coalMineChests : (inMine ? ironMineChests : workshopChests);
 
         // Запоминаем выбранную локацию
         currentLocation = destination;
@@ -1843,12 +1929,11 @@ int main() {
 
     auto updateAllLocations = [&](float dt) {
         const Location playerLocation = currentLocation;
-        updateMachines(dt);
-        // Временно выбираем данные второй территории. Указатели
-        // переключаются за O(1); массивы и прогресс не копируются.
-        switchLocation(playerLocation == Location::Workshop
-            ? Location::IronMine : Location::Workshop);
-        updateMachines(dt);
+        // Каждая территория получает ровно один шаг симуляции.
+        for (Location location : {Location::Workshop, Location::IronMine, Location::CoalMine}) {
+            switchLocation(location);
+            updateMachines(dt);
+        }
         // До отрисовки и ввода возвращаем контекст игрока.
         switchLocation(playerLocation);
     };
@@ -1872,6 +1957,8 @@ int main() {
 
         // Доставка продолжается при нахождении в любой локации.
         updateCargoDelivery(GetFrameTime());
+        updateCoal(coalToWorkshop, workshopCargoCoal, GetFrameTime());
+        updateCoal(coalToIronMine, ironMineCargoCoal, GetFrameTime());
 
         if (worldMapOpen && IsKeyPressed(KEY_A)) {
             autoCargoDelivery = !autoCargoDelivery;
@@ -1881,9 +1968,17 @@ int main() {
             dispatchCargo(false);
         }
 
+        if (worldMapOpen && IsKeyPressed(KEY_C)) {
+            dispatchCoal(coalToWorkshop, workshopCargoCoal, false);
+        }
+        if (worldMapOpen && IsKeyPressed(KEY_I)) {
+            dispatchCoal(coalToIronMine, ironMineCargoCoal, false);
+        }
+
         // Автоматический рейс только при наличии полной партии и места.
         if (autoCargoDelivery) {
             dispatchCargo(true);
+            dispatchAutoCoal();
         }
 
         // При смене территории сбрасываем только интерфейс игрока.
@@ -1914,8 +2009,9 @@ int main() {
 
             Vector2 mapMouse = GetMousePosition();
 
-            Rectangle workshopButton = {100, 160, 220, 110};
-            Rectangle mineButton = {480, 160, 220, 110};
+            Rectangle workshopButton = {30, 90, 220, 100};
+            Rectangle mineButton = {290, 90, 220, 100};
+            Rectangle coalButton = {550, 90, 220, 100};
 
             if (CheckCollisionPointRec(mapMouse, workshopButton)) {
 
@@ -1933,10 +2029,16 @@ int main() {
                 closeLocationUI();
                 switchLocation(Location::IronMine);
                 worldMapOpen = false;
-
                 x = 400;
                 y = 200;
-
+                locationSelectedThisFrame = true;
+            }
+            else if (CheckCollisionPointRec(mapMouse, coalButton)) {
+                closeLocationUI();
+                switchLocation(Location::CoalMine);
+                worldMapOpen = false;
+                x = 400;
+                y = 200;
                 locationSelectedThisFrame = true;
             }
         }
@@ -2034,77 +2136,42 @@ int main() {
             
             
             // ==========================================
-            // MINE CARGO — Загрузка железной руды
+            // CARGO — Ручная работа со складами рядом со станцией
             // ==========================================
-
-            if (currentLocation == Location::IronMine &&
-                nearCargoStation &&
-                IsKeyPressed(KEY_T)) {
-
-                for (int i = 0; i < INVENTORY_SIZE; i++) {
-
-                    if (inventory[i].type != ItemType::IronOre ||
-                        inventory[i].amount <= 0) {
-                        continue;
+            if (nearCargoStation && !inventoryOpen && !directionInputBlocked) {
+                auto loadStation = [&](ItemType type, int& stock, int capacity) {
+                    int remaining = std::min(10, capacity - stock);
+                    for (int i = 0; i < INVENTORY_SIZE && remaining > 0; ++i) {
+                        if (inventory[i].type != type || inventory[i].amount <= 0) continue;
+                        int amount = std::min(remaining, inventory[i].amount);
+                        inventory[i].amount -= amount;
+                        stock += amount;
+                        remaining -= amount;
+                        if (inventory[i].amount == 0) inventory[i] = {};
                     }
-
-                    int freeSpace = MINE_CARGO_CAPACITY - mineCargoIron;
-
-                    // За одно нажатие загружаем до 10 единиц
-                    int amount = std::min(
-                        10,
-                        std::min(inventory[i].amount, freeSpace)
-                    );
-
-                    if (amount <= 0) {
-                        break;
-                    }
-
-                    inventory[i].amount -= amount;
-                    mineCargoIron += amount;
-
-                    if (inventory[i].amount == 0) {
-                        inventory[i] = {};
-                    }
-
-                    break;
+                };
+                auto takeStation = [&](ItemType type, int& stock) {
+                    int amount = std::min(10, stock);
+                    if (amount <= 0) return;
+                    int remaining = addToInventory(inventory, INVENTORY_SIZE, type, amount);
+                    stock -= amount - remaining;
+                    if (remaining > 0) inventoryFullTimer = 1.0f;
+                };
+                if (IsKeyPressed(KEY_T)) {
+                    if (currentLocation == Location::IronMine)
+                        loadStation(ItemType::IronOre, mineCargoIron, MINE_CARGO_CAPACITY);
+                    else if (currentLocation == Location::CoalMine)
+                        loadStation(ItemType::Coal, coalMineCargo, COAL_CARGO_CAPACITY);
+                    else takeStation(ItemType::IronOre, workshopCargoIron);
+                }
+                if (IsKeyPressed(KEY_C)) {
+                    if (currentLocation == Location::Workshop)
+                        takeStation(ItemType::Coal, workshopCargoCoal);
+                    else if (currentLocation == Location::IronMine)
+                        takeStation(ItemType::Coal, ironMineCargoCoal);
                 }
             }
-            
-            
-            // ==========================================
-            // WORKSHOP CARGO — Выгрузка железной руды
-            // ==========================================
 
-            if (currentLocation == Location::Workshop &&
-                nearCargoStation &&
-                IsKeyPressed(KEY_T) &&
-                !inventoryOpen) {
-
-                // Забираем до 10 единиц со склада
-                int amount = std::min(10, workshopCargoIron);
-
-                if (amount > 0) {
-
-                    int remaining = addToInventory(
-                        inventory,
-                        INVENTORY_SIZE,
-                        ItemType::IronOre,
-                        amount
-                    );
-
-                    // Убираем со склада только то,
-                    // что действительно поместилось в инвентарь
-                    workshopCargoIron -= amount - remaining;
-
-                    if (remaining > 0) {
-                        inventoryFullTimer = 1.0f;
-                    }
-                }
-            }
-            
-            
-            
             bool furnacePlacedThisFrame = false;
             bool drillPlacedThisFrame = false;
             bool rollerPlacedThisFrame = false;
@@ -2243,7 +2310,7 @@ int main() {
                     !CheckCollisionRecs(cell, player) &&
                     !CheckCollisionRecs(cell, wall) &&
                     !CheckCollisionRecs(cell, cargoStation) &&
-                    !(currentLocation == Location::IronMine && placingFurnace);
+                    !(currentLocation != Location::Workshop && placingFurnace);
                 
                 // ЛКМ — строим
                 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
@@ -3680,6 +3747,9 @@ int main() {
             // Светлая земля мастерской
             groundColor = Color{218, 208, 190, 255};
         }
+        else if (currentLocation == Location::CoalMine) {
+            groundColor = Color{145, 143, 137, 255};
+        }
         else {
             // Каменистая земля шахты
             groundColor = Color{175, 172, 165, 255};
@@ -3969,71 +4039,25 @@ int main() {
         DrawText(TextFormat("Score: %i", score), 10, 10, 20, BLACK);
         
         
-        // Интерфейс грузового склада шахты
-        if (currentLocation == Location::IronMine &&
-            !worldMapOpen) {
-
-            DrawRectangle(540, 40, 250, 65, DARKGRAY);
-
-            DrawText(
-                TextFormat("IRON CARGO: %i / %i",
-                    mineCargoIron,
-                    MINE_CARGO_CAPACITY),
-                550, 50, 17, WHITE
-            );
-
-            DrawText(
-                "T - LOAD 10 IRON",
-                550, 78, 16, YELLOW
-            );
-        }
-        
-        
-        // ==========================================
-        // WORKSHOP CARGO — Интерфейс склада
-        // ==========================================
-
-        if (currentLocation == Location::Workshop &&
-            !worldMapOpen) {
-
-            DrawRectangle(540, 40, 250, 65, DARKGRAY);
-
-            DrawText(
-                TextFormat("IRON CARGO: %i / %i",
-                    workshopCargoIron,
-                    WORKSHOP_CARGO_CAPACITY),
-                550, 50, 17, WHITE
-            );
-
-            DrawText(
-                "T - TAKE 10 IRON",
-                550, 78, 16, YELLOW
-            );
-        }
-        
-        // Краткий статус перевозки внутри любой локации.
+        // Склад активной территории и краткий статус перевозок.
         if (!worldMapOpen) {
-            DrawRectangle(540, 108, 250, 45, DARKGRAY);
-            if (cargoInTransit > 0 && cargoTravelRemaining > 0.0f) {
-                DrawText(TextFormat("IN TRANSIT: %i / %.1fs",
-                    cargoInTransit, cargoTravelRemaining),
-                    550, 114, 15, WHITE);
+            DrawRectangle(540, 40, 250, 100, DARKGRAY);
+            if (currentLocation == Location::CoalMine) {
+                DrawText(TextFormat("COAL OUT: %i / %i", coalMineCargo, COAL_CARGO_CAPACITY), 550, 48, 16, WHITE);
+                DrawText("T - LOAD COAL (1)", 550, 69, 15, YELLOW);
+            } else {
+                bool workshop = currentLocation == Location::Workshop;
+                DrawText(TextFormat("IRON %s: %i / 200", workshop ? "IN" : "OUT", workshop ? workshopCargoIron : mineCargoIron), 550, 48, 16, WHITE);
+                DrawText(TextFormat("COAL IN: %i / 200", workshop ? workshopCargoCoal : ironMineCargoCoal), 550, 69, 16, WHITE);
+                DrawText(workshop ? "T - TAKE IRON | C - COAL" : "T - LOAD IRON | C - COAL", 550, 90, 14, YELLOW);
+                DrawText("SLOT 1 IRON | SLOT 2 COAL", 550, 111, 14, LIGHTGRAY);
             }
-            else if (cargoInTransit > 0) {
-                DrawText("WAITING TO UNLOAD", 550, 114, 15, YELLOW);
-            }
-            else {
-                DrawText("NO CARGO IN TRANSIT", 550, 114, 15, WHITE);
-            }
-            DrawText(autoCargoDelivery ? "AUTO DELIVERY: ON" : "AUTO DELIVERY: OFF",
-                550, 132, 14, autoCargoDelivery ? GREEN : LIGHTGRAY);
+            DrawRectangle(540, 143, 250, 42, DARKGRAY);
+            DrawText(TextFormat("TRANSIT: Fe %i | C %i + %i", cargoInTransit, coalToWorkshop.inTransit, coalToIronMine.inTransit), 550, 149, 14, WHITE);
+            DrawText(autoCargoDelivery ? "AUTO DELIVERY: ON" : "AUTO DELIVERY: OFF", 550, 166, 14, autoCargoDelivery ? GREEN : LIGHTGRAY);
         }
-
-        // Название текущей локации
-        const char* locationName =
-            currentLocation == Location::Workshop
-            ? "WORKSHOP"
-            : "IRON MINE";
+        const char* locationName = currentLocation == Location::Workshop ? "WORKSHOP" :
+            (currentLocation == Location::IronMine ? "IRON MINE" : "COAL MINE");
 
         DrawText(
             TextFormat("Location: %s", locationName),
@@ -4074,7 +4098,7 @@ int main() {
 
         // Подсказка, если игрок рядом
         if (nearCargoStation) {
-            DrawText("PRESS T", 675, 260, 16, DARKGREEN);
+            DrawText(currentLocation == Location::CoalMine ? "PRESS T" : "PRESS T / C", 640, 260, 16, DARKGREEN);
         }
         
         DrawRectangle(x, y, 40, 40, BLUE);
@@ -5039,79 +5063,38 @@ int main() {
             }
         }
         
-        // Экран карты мира
+        // Экран карты мира: три территории и три независимых рейса.
         if (worldMapOpen) {
             DrawRectangle(0, 0, 800, 450, DARKBROWN);
+            DrawText("WORLD MAP", 300, 20, 32, WHITE);
+            auto drawLocation = [&](int left, Color color, const char* name, const char* line1, const char* line2) {
+                DrawRectangle(left, 90, 220, 100, color);
+                DrawRectangleLines(left, 90, 220, 100, WHITE);
+                DrawText(name, left + 12, 100, 22, WHITE);
+                DrawText(line1, left + 12, 137, 16, WHITE);
+                DrawText(line2, left + 12, 160, 16, WHITE);
+            };
+            const std::string workshopIronText = TextFormat("IRON IN: %i/200", workshopCargoIron);
+            const std::string mineIronText = TextFormat("IRON OUT: %i/200", mineCargoIron);
+            drawLocation(30, BROWN, "WORKSHOP", workshopIronText.c_str(), TextFormat("COAL IN: %i/200", workshopCargoCoal));
+            drawLocation(290, GRAY, "IRON MINE", mineIronText.c_str(), TextFormat("COAL IN: %i/200", ironMineCargoCoal));
+            drawLocation(550, DARKGRAY, "COAL MINE", TextFormat("COAL OUT: %i/200", coalMineCargo), "SLOT 1: LOAD COAL");
 
-            // Информация о грузовых складах
-            DrawText(
-                TextFormat("MINE: %i IRON", mineCargoIron),
-                480, 290, 18, WHITE
-            );
-
-            DrawText(
-                TextFormat("WORKSHOP: %i IRON", workshopCargoIron),
-                100, 290, 18, WHITE
-            );
-
-            DrawText("T - SEND UP TO 10 IRON", 100, 335, 18, YELLOW);
-            DrawText(autoCargoDelivery ? "A - AUTO: ON" : "A - AUTO: OFF",
-                480, 335, 18, autoCargoDelivery ? GREEN : YELLOW);
-
-            // Маршрут от шахты к мастерской. Складские остатки
-            // не включают груз, который уже отправлен.
-            const float progress = cargoInTransit > 0
-                ? std::clamp(1.0f - cargoTravelRemaining / CARGO_TRAVEL_TIME,
-                    0.0f, 1.0f)
-                : 0.0f;
-            const char* deliveryStatus = "NO CARGO IN TRANSIT";
-            if (cargoInTransit > 0 && cargoTravelRemaining > 0.0f) {
-                deliveryStatus = TextFormat("IN TRANSIT: %i IRON | %.1fs",
-                    cargoInTransit, cargoTravelRemaining);
-            }
-            else if (cargoInTransit > 0) {
-                deliveryStatus = "WAITING FOR FREE STORAGE";
-            }
-            else if (autoCargoDelivery) {
-                deliveryStatus = mineCargoIron < CARGO_BATCH_SIZE
-                    ? "AUTO: WAITING FOR 10 IRON"
-                    : "AUTO: WAITING FOR STORAGE";
-            }
-            DrawText(deliveryStatus,
-                (800 - MeasureText(deliveryStatus, 18)) / 2, 90, 18, WHITE);
-            DrawRectangle(100, 122, 600, 12, GRAY);
-            DrawRectangle(700 - (int)(600 * progress), 122,
-                (int)(600 * progress), 12, GOLD);
-            DrawRectangleLines(100, 122, 600, 12, WHITE);
-
-            DrawLine(320, 215, 480, 215, LIGHTGRAY);
-            DrawLine(322, 215, 334, 208, LIGHTGRAY);
-            DrawLine(322, 215, 334, 222, LIGHTGRAY);
-            if (cargoInTransit > 0) {
-                const int cargoX = 465 - (int)(130 * progress);
-                DrawRectangle(cargoX - 10, 204, 20, 20, GOLD);
-                DrawRectangleLines(cargoX - 10, 204, 20, 20, BLACK);
-            }
-
-            DrawText(
-                "WORLD MAP",
-                300, 40, 32, WHITE
-            );
-
-            // Мастерская
-            DrawRectangle(100, 160, 220, 110, BROWN);
-            DrawRectangleLines(100, 160, 220, 110, WHITE);
-            DrawText("WORKSHOP", 135, 200, 24, WHITE);
-
-            // Железная шахта
-            DrawRectangle(480, 160, 220, 110, GRAY);
-            DrawRectangleLines(480, 160, 220, 110, WHITE);
-            DrawText("IRON MINE", 515, 200, 24, WHITE);
-
-            DrawText(
-                "ESC - RETURN",
-                310, 375, 20, WHITE
-            );
+            auto drawRoute = [&](int y, const char* name, int amount, float remaining, Color color) {
+                DrawText(name, 30, y, 16, WHITE);
+                const float progress = amount > 0 ? std::clamp(1.0f - remaining / CARGO_TRAVEL_TIME, 0.0f, 1.0f) : 0.0f;
+                DrawRectangle(410, y + 3, 160, 12, GRAY);
+                DrawRectangle(410, y + 3, (int)(160 * progress), 12, color);
+                DrawRectangleLines(410, y + 3, 160, 12, WHITE);
+                const char* status = amount == 0 ? "IDLE" : (remaining > 0 ? TextFormat("%i | %.1fs", amount, remaining) : "WAITING");
+                DrawText(status, 585, y, 16, WHITE);
+            };
+            drawRoute(215, "T - IRON MINE > WORKSHOP", cargoInTransit, cargoTravelRemaining, GOLD);
+            drawRoute(250, "C - COAL MINE > WORKSHOP", coalToWorkshop.inTransit, coalToWorkshop.remaining, LIGHTGRAY);
+            drawRoute(285, "I - COAL MINE > IRON MINE", coalToIronMine.inTransit, coalToIronMine.remaining, LIGHTGRAY);
+            DrawText(autoCargoDelivery ? "A - AUTO: ON (ALL ROUTES)" : "A - AUTO: OFF (ALL ROUTES)", 30, 335, 19, autoCargoDelivery ? GREEN : YELLOW);
+            DrawText("10 units / 5 seconds per route", 30, 365, 17, WHITE);
+            DrawText("ESC - RETURN", 590, 395, 20, WHITE);
         }
 
         EndDrawing();
