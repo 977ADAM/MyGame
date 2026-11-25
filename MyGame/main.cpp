@@ -92,6 +92,30 @@ Rectangle GetPunchHoleRect(int row, int column) {
 
 constexpr int TAKE_COMMAND = 4;
 constexpr int PUT_COMMAND = 5;
+constexpr int SET_COMMAND = 6;
+constexpr int ADD_COMMAND = 7;
+constexpr int SUB_COMMAND = 8;
+constexpr int MUL_COMMAND = 9;
+constexpr int DIV_COMMAND = 10;
+
+bool IsArithmeticCommand(int command) {
+    return command >= SET_COMMAND && command <= DIV_COMMAND;
+}
+
+// 8-bit unsigned register: arithmetic wraps modulo 256.
+// Invalid instructions never change the register.
+bool ExecuteArithmetic(int& value, int command, int argument) {
+    if (!IsArithmeticCommand(command) || argument < 0 || argument > 15 ||
+        (command == DIV_COMMAND && argument == 0)) return false;
+    switch (command) {
+        case SET_COMMAND: value = argument; break;
+        case ADD_COMMAND: value = (value + argument) & 255; break;
+        case SUB_COMMAND: value = (value + 256 - argument) & 255; break;
+        case MUL_COMMAND: value = (value * argument) & 255; break;
+        case DIV_COMMAND: value /= argument; break;
+    }
+    return true;
+}
 
 const char* FormatCardCommand(int command, int argument) {
     const char* name = "UNKNOWN";
@@ -100,7 +124,12 @@ const char* FormatCardCommand(int command, int argument) {
     else if (command == 3) name = "REVERSE";
     else if (command == TAKE_COMMAND) name = "TAKE";
     else if (command == PUT_COMMAND) name = "PUT";
-    return argument == 0 ? name : TextFormat("%s %i", name, argument);
+    else if (command == SET_COMMAND) name = "SET";
+    else if (command == ADD_COMMAND) name = "ADD";
+    else if (command == SUB_COMMAND) name = "SUB";
+    else if (command == MUL_COMMAND) name = "MUL";
+    else if (command == DIV_COMMAND) name = "DIV";
+    return argument == 0 && !IsArithmeticCommand(command) ? name : TextFormat("%s %i", name, argument);
 }
 
 void DrawPunchedCard(int x, int y, int command, int argument) {
@@ -690,13 +719,15 @@ int main() {
         int prerequisite;
         bool unlocked = false;
     };
-    std::array<ResearchTechnology, 3> technologies{{
+    std::array<ResearchTechnology, 4> technologies{{
         {"Card manufacturing", "Craft 2 blank cards from 1 wood", 30, 8,
             ItemType::Wood, "Wood", 2, -1},
         {"Precision drilling", "All drills: 0.4s > 0.25s per hit", 55, 12,
             ItemType::IronPlate, "Plates", 3, 0},
         {"Heavy freight", "All routes: 10 > 20 units per trip", 70, 16,
-            ItemType::IronPlate, "Plates", 4, 0}
+            ItemType::IronPlate, "Plates", 4, 0},
+        {"Mechanical computing", "Unlock the 8-bit register and arithmetic cards", 60, 15,
+            ItemType::IronPlate, "Plates", 5, 0}
     }};
     std::string researchNotice = "Choose a technology to research.";
     auto researchBlocker = [&](int index) -> const char* {
@@ -735,7 +766,7 @@ int main() {
         return true;
     };
     auto researchRect = [](int index) -> Rectangle {
-        return {550, (float)(111 + index * 94), 200, 42};
+        return {550, (float)(92 + index * 74), 200, 34};
     };
 
     auto acceptContract = [&](int index) {
@@ -836,6 +867,83 @@ int main() {
     };
 
     
+    // Mechanical computing prototype: one workshop register, one physical card reader.
+    bool registerOpen = false;
+    int registerValue = 0;
+    InventorySlot registerReader = {};
+    size_t registerPC = 0;
+    bool registerRunning = false;
+    float registerTimer = 0.0f;
+    std::string registerNotice = "Insert a punched card or program.";
+    auto registerInventoryRect = [](int i) -> Rectangle {
+        return {(float)(420 + (i % 5) * 70), (float)(96 + (i / 5) * 66), 60, 60};
+    };
+    auto insertRegisterCard = [&](int index) {
+        if (!technologies[3].unlocked || registerRunning || registerReader.amount != 0 ||
+            index < 0 || index >= INVENTORY_SIZE ||
+            inventory[index].type != ItemType::PunchedCard || inventory[index].amount != 1 ||
+            inventory[index].cards.empty()) return false;
+        registerReader = std::move(inventory[index]);
+        inventory[index] = {};
+        registerPC = 0;
+        registerTimer = 0;
+        registerNotice = "Program inserted. STEP or RUN.";
+        return true;
+    };
+    auto ejectRegisterCard = [&]() {
+        if (registerRunning || registerReader.amount == 0) return false;
+        for (auto& slot : inventory) {
+            if (slot.amount != 0) continue;
+            slot = std::move(registerReader);
+            registerReader = {};
+            registerPC = 0;
+            registerTimer = 0;
+            registerNotice = "Program returned to inventory.";
+            return true;
+        }
+        registerNotice = "Inventory full. Card stays in reader.";
+        return false;
+    };
+    auto stepRegister = [&]() {
+        if (!technologies[3].unlocked || registerPC >= registerReader.cards.size()) {
+            registerRunning = false;
+            registerNotice = registerReader.cards.empty() ? "Insert a program." : "Done. REWIND to repeat.";
+            return false;
+        }
+        const auto& instruction = registerReader.cards[registerPC];
+        if (!ExecuteArithmetic(registerValue, instruction.command, instruction.argument)) {
+            registerRunning = false;
+            registerNotice = instruction.command == DIV_COMMAND && instruction.argument == 0
+                ? "Error: division by zero." : "Error: unsupported instruction.";
+            return false;
+        }
+        ++registerPC;
+        if (registerPC == registerReader.cards.size()) {
+            registerRunning = false;
+            registerNotice = "Program complete.";
+        } else registerNotice = "Instruction executed.";
+        return true;
+    };
+    auto updateRegister = [&](float dt) {
+        if (!registerRunning) return;
+        registerTimer += dt;
+        while (registerRunning && registerTimer >= 0.35f) {
+            registerTimer -= 0.35f;
+            stepRegister();
+        }
+    };
+    auto rewindRegister = [&]() {
+        registerRunning = false;
+        registerPC = 0;
+        registerTimer = 0;
+        registerNotice = "Reader rewound; register value preserved.";
+    };
+    const Rectangle registerStepButton{28, 248, 170, 32};
+    const Rectangle registerRunButton{208, 248, 170, 32};
+    const Rectangle registerRewindButton{28, 288, 170, 32};
+    const Rectangle registerResetButton{208, 288, 170, 32};
+    const Rectangle registerEjectButton{28, 328, 350, 32};
+
     int selectedSlot = -1;
     int previewSlot = -1;
     int previewOffset = 0;
@@ -2404,11 +2512,50 @@ int main() {
         bool directionSelectionStartedThisFrame = false;
         // Биржа доступна в мастерской. Модальное окно не пропускает
         // нажатия мыши и клавиш в игровую карту.
+        bool registerToggled = false;
+        if (registerOpen && (IsKeyPressed(KEY_K) || IsKeyPressed(KEY_ESCAPE))) {
+            registerOpen = false;
+            registerToggled = true;
+        } else if (!registerOpen && !researchOpen && !shopOpen && !contractsOpen &&
+                   technologies[3].unlocked && currentLocation == Location::Workshop &&
+                   !worldMapOpen && !inventoryOpen && !puncherOpen && !developerPanelOpen &&
+                   !directionInputBlocked && !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
+                   IsKeyPressed(KEY_K)) {
+            closeLocationUI();
+            registerOpen = true;
+            registerToggled = true;
+        }
+        if (registerOpen && !registerToggled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            if (CheckCollisionPointRec(mouse, registerRunButton)) {
+                if (registerRunning) { registerRunning = false; registerNotice = "Paused."; }
+                else if (registerPC < registerReader.cards.size()) {
+                    registerRunning = true;
+                    registerTimer = 0;
+                    registerNotice = "Running program...";
+                } else registerNotice = "Insert a program or REWIND.";
+            } else if (CheckCollisionPointRec(mouse, registerStepButton) && !registerRunning) {
+                stepRegister();
+            } else if (CheckCollisionPointRec(mouse, registerRewindButton)) {
+                rewindRegister();
+            } else if (CheckCollisionPointRec(mouse, registerResetButton) && !registerRunning) {
+                registerValue = 0;
+                registerNotice = "Register reset to zero.";
+            } else if (CheckCollisionPointRec(mouse, registerEjectButton)) {
+                ejectRegisterCard();
+            } else if (!registerRunning) {
+                for (int i = 0; i < INVENTORY_SIZE; ++i) {
+                    if (CheckCollisionPointRec(mouse, registerInventoryRect(i))) {
+                        if (!insertRegisterCard(i)) registerNotice = "Use a punched card and an empty reader.";
+                        break;
+                    }
+                }
+            }
+        }
         bool researchToggled = false;
         if (researchOpen && (IsKeyPressed(KEY_L) || IsKeyPressed(KEY_ESCAPE))) {
             researchOpen = false;
             researchToggled = true;
-        } else if (!researchOpen && !shopOpen && !contractsOpen &&
+        } else if (!researchOpen && !shopOpen && !contractsOpen && !registerOpen && !registerToggled &&
                    currentLocation == Location::Workshop && !worldMapOpen &&
                    !inventoryOpen && !puncherOpen && !developerPanelOpen &&
                    !directionInputBlocked && !locationSelectedThisFrame &&
@@ -2429,7 +2576,7 @@ int main() {
         if (shopOpen && (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_ESCAPE))) {
             shopOpen = false;
             shopToggled = true;
-        } else if (!shopOpen && !contractsOpen && !researchOpen && !researchToggled && currentLocation == Location::Workshop &&
+        } else if (!shopOpen && !contractsOpen && !researchOpen && !researchToggled && !registerOpen && !registerToggled && currentLocation == Location::Workshop &&
                    !worldMapOpen && !inventoryOpen && !puncherOpen &&
                    !developerPanelOpen && !directionInputBlocked &&
                    !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
@@ -2450,7 +2597,7 @@ int main() {
         if (contractsOpen && (IsKeyPressed(KEY_B) || IsKeyPressed(KEY_ESCAPE))) {
             contractsOpen = false;
             contractToggled = true;
-        } else if (!contractsOpen && !shopOpen && !shopToggled && !researchOpen && !researchToggled && currentLocation == Location::Workshop &&
+        } else if (!contractsOpen && !shopOpen && !shopToggled && !researchOpen && !researchToggled && !registerOpen && !registerToggled && currentLocation == Location::Workshop &&
                    !worldMapOpen && !inventoryOpen && !puncherOpen &&
                    !developerPanelOpen && !directionInputBlocked &&
                    !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
@@ -2459,7 +2606,7 @@ int main() {
             contractsOpen = true;
             contractToggled = true;
         }
-        bool panelToggled = !contractsOpen && !contractToggled && !shopOpen && !shopToggled && !researchOpen && !researchToggled && IsKeyPressed(KEY_F1);
+        bool panelToggled = !contractsOpen && !contractToggled && !shopOpen && !shopToggled && !researchOpen && !researchToggled && !registerOpen && !registerToggled && IsKeyPressed(KEY_F1);
         if (contractsOpen && !contractToggled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             for (int i = 0; i < (int)contracts.size(); ++i) {
                 if (CheckCollisionPointRec(mouse, contractActionRect(i))) {
@@ -2527,7 +2674,7 @@ int main() {
         if (!developerPanelOpen && !panelToggled &&
             !worldMapOpen && !locationSelectedThisFrame &&
             !contractsOpen && !contractToggled && !shopOpen && !shopToggled &&
-            !researchOpen && !researchToggled) {
+            !researchOpen && !researchToggled && !registerOpen && !registerToggled) {
             
             
             // ==========================================
@@ -3282,7 +3429,9 @@ int main() {
             validPattern =
                 ((command == 1 || command == 2) && argument > 0) ||
                 (command == 3 && argument == 0) ||
-                command == TAKE_COMMAND || command == PUT_COMMAND;
+                command == TAKE_COMMAND || command == PUT_COMMAND ||
+                (technologies[3].unlocked && IsArithmeticCommand(command) &&
+                 (command != DIV_COMMAND || argument != 0));
 
             // Закрываем окно постройки вместе с инвентарём.
             if (!inventoryOpen) {
@@ -4121,6 +4270,7 @@ int main() {
         // отладочной паузой для механизмов в обеих локациях.
         if (!developerPanelOpen && !panelToggled) {
             updateAllLocations(GetFrameTime());
+            updateRegister(GetFrameTime());
         }
 
         BeginDrawing();
@@ -4429,6 +4579,7 @@ int main() {
         DrawText(TextFormat("XP: %lld", experiencePoints), 10, 82, 18, DARKBLUE);
         if (currentLocation == Location::Workshop) {
             DrawText("B - CONTRACTS | S - SHOP | L - RESEARCH", 10, 105, 16, DARKBLUE);
+            if (technologies[3].unlocked) DrawText("K - MECHANICAL REGISTER", 10, 125, 16, DARKBLUE);
         }
         
         
@@ -5370,6 +5521,9 @@ int main() {
             DrawText("Card Puncher", 185, 50, 24, WHITE);
             DrawText("RUN 0001   BACK 0010", 185, 85, 18, LIGHTGRAY);
             DrawText("REVERSE 0011   TAKE 0100   PUT 0101", 185, 110, 18, LIGHTGRAY);
+            if (technologies[3].unlocked) {
+                DrawText("SET 0110  ADD 0111  SUB 1000  MUL 1001  DIV 1010", 185, 135, 14, SKYBLUE);
+            }
 
             for (int row = 0; row < 2; row++) {
                 for (int i = 0; i < 4; i++) {
@@ -5396,8 +5550,14 @@ int main() {
             if (!hasBlank) {
                 error = "NO BLANK CARD";
             }
-            else if (command < 1 || command > PUT_COMMAND) {
+            else if (command < 1 || command > DIV_COMMAND) {
                 error = "UNKNOWN COMMAND";
+            }
+            else if (IsArithmeticCommand(command) && !technologies[3].unlocked) {
+                error = "RESEARCH MECHANICAL COMPUTING";
+            }
+            else if (command == DIV_COMMAND && argument == 0) {
+                error = "DIVISION BY ZERO";
             }
             else if (command == 3 && argument != 0) {
                 error = "REVERSE NEEDS NO ARGUMENT";
@@ -5562,23 +5722,64 @@ int main() {
             DrawText("Research once. Upgrades apply to all locations.", 28, 56, 17, LIGHTGRAY);
             for (int i = 0; i < (int)technologies.size(); ++i) {
                 const auto& t = technologies[i];
-                int y = 92 + i * 94;
+                int y = 78 + i * 74;
                 const char* blocker = researchBlocker(i);
-                DrawRectangle(24, y, 752, 88, DARKGRAY);
-                DrawRectangleLines(24, y, 752, 88, t.unlocked ? GREEN : GRAY);
+                DrawRectangle(24, y, 752, 70, DARKGRAY);
+                DrawRectangleLines(24, y, 752, 70, t.unlocked ? GREEN : GRAY);
                 DrawText(t.name, 38, y + 7, 20, WHITE);
-                DrawText(t.description, 38, y + 31, 16, GOLD);
+                DrawText(t.description, 38, y + 28, 16, GOLD);
                 DrawText(TextFormat("GBP %i | %i XP | %s %i/%i", t.moneyCost, t.xpCost,
-                    t.materialName, contractInventoryAmount(t.material), t.materialCost), 38, y + 55, 16, LIGHTGRAY);
+                    t.materialName, contractInventoryAmount(t.material), t.materialCost), 38, y + 48, 16, LIGHTGRAY);
                 Rectangle action = researchRect(i);
                 DrawRectangleRec(action, t.unlocked ? DARKGREEN : blocker ? GRAY : DARKBLUE);
                 DrawRectangleLinesEx(action, 1, WHITE);
-                DrawText(t.unlocked ? "RESEARCHED" : blocker ? "LOCKED" : "RESEARCH", 565, (int)action.y + 12, 18, WHITE);
+                DrawText(t.unlocked ? "RESEARCHED" : blocker ? "LOCKED" : "RESEARCH", 565, (int)action.y + 8, 18, WHITE);
                 if (t.prerequisite >= 0 && !technologies[t.prerequisite].unlocked)
-                    DrawText("Needs Card manufacturing", 551, y + 67, 14, YELLOW);
+                    DrawText("Needs Card manufacturing", 551, y + 53, 14, YELLOW);
             }
             DrawText(researchNotice.c_str(), 28, 390, 17, YELLOW);
             DrawText("L / ESC - CLOSE", 580, 420, 16, WHITE);
+        }
+
+        if (registerOpen) {
+            DrawRectangle(0, 0, 800, 450, Color{43, 35, 29, 255});
+            DrawText("MECHANICAL REGISTER", 28, 16, 27, GOLD);
+            DrawText("8-bit unsigned | 0 - 255 | arithmetic modulo 256", 28, 51, 16, LIGHTGRAY);
+            DrawRectangle(24, 81, 368, 155, DARKGRAY);
+            DrawText(TextFormat("VALUE: %03i", registerValue), 38, 94, 32, WHITE);
+            for (int bit = 7; bit >= 0; --bit) {
+                int bx = 38 + (7 - bit) * 42;
+                bool set = (registerValue & (1 << bit)) != 0;
+                DrawRectangle(bx, 140, 34, 35, set ? GOLD : GRAY);
+                DrawText(set ? "1" : "0", bx + 11, 147, 21, BLACK);
+            }
+            DrawText(TextFormat("Reader: %i / %i executed", (int)registerPC,
+                (int)registerReader.cards.size()), 38, 183, 17, LIGHTGRAY);
+            if (registerPC < registerReader.cards.size()) {
+                const auto& next = registerReader.cards[registerPC];
+                DrawText(TextFormat("Next: %s", FormatCardCommand(next.command, next.argument)), 38, 206, 17, GOLD);
+            } else DrawText(registerReader.cards.empty() ? "Reader empty" : "End of program", 38, 206, 17, GOLD);
+            auto drawRegisterButton = [](Rectangle r, const char* label, bool enabled) {
+                DrawRectangleRec(r, enabled ? DARKBLUE : GRAY);
+                DrawRectangleLinesEx(r, 1, LIGHTGRAY);
+                DrawText(label, (int)r.x + 9, (int)r.y + 8, 16, WHITE);
+            };
+            drawRegisterButton(registerStepButton, "STEP", !registerRunning && registerPC < registerReader.cards.size());
+            drawRegisterButton(registerRunButton, registerRunning ? "PAUSE" : "RUN", registerPC < registerReader.cards.size());
+            drawRegisterButton(registerRewindButton, "REWIND", true);
+            drawRegisterButton(registerResetButton, "ZERO REGISTER", !registerRunning);
+            drawRegisterButton(registerEjectButton, "EJECT PROGRAM", !registerRunning && registerReader.amount > 0);
+            DrawText("INVENTORY - click a punched card", 420, 72, 16, GOLD);
+            for (int i = 0; i < INVENTORY_SIZE; ++i) {
+                Rectangle r = registerInventoryRect(i);
+                DrawRectangleRec(r, DARKGRAY);
+                DrawRectangleLinesEx(r, 1, inventory[i].type == ItemType::PunchedCard ? GOLD : GRAY);
+                drawStoredStack(inventory[i], (int)r.x, (int)r.y);
+                if (inventory[i].type == ItemType::PunchedCard && inventory[i].cards.size() > 1)
+                    DrawText(TextFormat("%i cards", (int)inventory[i].cards.size()), (int)r.x+3, (int)r.y+43, 12, GOLD);
+            }
+            DrawText(registerNotice.c_str(), 28, 375, 17, YELLOW);
+            DrawText("K / ESC - CLOSE | Running programs continue in other locations", 28, 420, 16, LIGHTGRAY);
         }
 
         EndDrawing();
