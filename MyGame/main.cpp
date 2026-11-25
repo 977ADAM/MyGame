@@ -344,7 +344,7 @@ int main() {
     // ==========================================
     // CARGO DELIVERY — Груз в пути и автоматические рейсы
     // ==========================================
-    const int CARGO_BATCH_SIZE = 10;
+    int CARGO_BATCH_SIZE = 10; // Улучшается исследованием грузоподъёмности.
     const float CARGO_TRAVEL_TIME = 5.0f;
     int cargoInTransit = 0;
     float cargoTravelRemaining = 0.0f;
@@ -593,6 +593,9 @@ int main() {
     int completedContracts = 0;
     bool contractsOpen = false;
     bool shopOpen = false;
+    bool researchOpen = false;
+    int cardBatchSize = 1;
+    float drillHitDuration = 0.4f;
     bool woodlandUnlocked = false;
     constexpr int WOODLAND_PRICE = 100;
     std::string mapNotice;
@@ -676,6 +679,65 @@ int main() {
         }
         return total;
     };
+    // RESEARCH — одноразовые исследования за деньги, XP и материалы.
+    struct ResearchTechnology {
+        const char* name;
+        const char* description;
+        int moneyCost, xpCost;
+        ItemType material;
+        const char* materialName;
+        int materialCost;
+        int prerequisite;
+        bool unlocked = false;
+    };
+    std::array<ResearchTechnology, 3> technologies{{
+        {"Card manufacturing", "Craft 2 blank cards from 1 wood", 30, 8,
+            ItemType::Wood, "Wood", 2, -1},
+        {"Precision drilling", "All drills: 0.4s > 0.25s per hit", 55, 12,
+            ItemType::IronPlate, "Plates", 3, 0},
+        {"Heavy freight", "All routes: 10 > 20 units per trip", 70, 16,
+            ItemType::IronPlate, "Plates", 4, 0}
+    }};
+    std::string researchNotice = "Choose a technology to research.";
+    auto researchBlocker = [&](int index) -> const char* {
+        if (index < 0 || index >= (int)technologies.size()) return "Invalid technology.";
+        const auto& t = technologies[index];
+        if (t.unlocked) return "Already researched.";
+        if (t.prerequisite >= 0 && !technologies[t.prerequisite].unlocked)
+            return "Research Card manufacturing first.";
+        if (money < t.moneyCost) return "Not enough money.";
+        if (experiencePoints < t.xpCost) return "Not enough XP.";
+        if (contractInventoryAmount(t.material) < t.materialCost) return "Not enough materials.";
+        return nullptr;
+    };
+    auto researchTechnology = [&](int index) {
+        if (const char* reason = researchBlocker(index)) {
+            researchNotice = reason;
+            return false;
+        }
+        auto& t = technologies[index];
+        int remaining = t.materialCost;
+        for (auto& slot : inventory) {
+            if (remaining == 0) break;
+            if (slot.type != t.material || slot.amount <= 0) continue;
+            int used = std::min(slot.amount, remaining);
+            slot.amount -= used;
+            remaining -= used;
+            if (slot.amount == 0) slot = {};
+        }
+        money -= t.moneyCost;
+        experiencePoints -= t.xpCost;
+        t.unlocked = true;
+        if (index == 0) cardBatchSize = 2;
+        if (index == 1) drillHitDuration = 0.25f;
+        if (index == 2) CARGO_BATCH_SIZE = 20;
+        researchNotice = std::string("Researched: ") + t.name;
+        return true;
+    };
+    auto researchRect = [](int index) -> Rectangle {
+        return {550, (float)(111 + index * 94), 200, 42};
+    };
+
     auto acceptContract = [&](int index) {
         if (!contracts[index].accepted) contracts[index].accepted = true;
     };
@@ -785,10 +847,21 @@ int main() {
     struct CraftOrder {
         ItemType result;
         float duration;
+        int amount = 1;
     };
 
     std::queue<CraftOrder> craftQueue;
     float craftTimer = 0.0f;
+    // Частично помещённая партия не дублируется при следующем кадре.
+    auto finishCraftOrder = [&]() {
+        if (craftQueue.empty() || craftTimer > 0.0f) return false;
+        auto& order = craftQueue.front();
+        order.amount = addToInventory(inventory, INVENTORY_SIZE, order.result, order.amount);
+        if (order.amount > 0) return false;
+        craftQueue.pop();
+        if (!craftQueue.empty()) craftTimer = craftQueue.front().duration;
+        return true;
+    };
     
     static TileType workshopGrid[ROWS][COLS] = {};
     auto* grid = workshopGrid;
@@ -1852,7 +1925,7 @@ int main() {
                 drill.status = "Mining";
                 drill.hitTimer += dt;
 
-                if (drill.hitTimer < 0.4f) {
+                if (drill.hitTimer < drillHitDuration) {
                     continue;
                 }
 
@@ -2331,11 +2404,32 @@ int main() {
         bool directionSelectionStartedThisFrame = false;
         // Биржа доступна в мастерской. Модальное окно не пропускает
         // нажатия мыши и клавиш в игровую карту.
+        bool researchToggled = false;
+        if (researchOpen && (IsKeyPressed(KEY_L) || IsKeyPressed(KEY_ESCAPE))) {
+            researchOpen = false;
+            researchToggled = true;
+        } else if (!researchOpen && !shopOpen && !contractsOpen &&
+                   currentLocation == Location::Workshop && !worldMapOpen &&
+                   !inventoryOpen && !puncherOpen && !developerPanelOpen &&
+                   !directionInputBlocked && !locationSelectedThisFrame &&
+                   !IsKeyPressed(KEY_F1) && IsKeyPressed(KEY_L)) {
+            closeLocationUI();
+            researchOpen = true;
+            researchToggled = true;
+        }
+        if (researchOpen && !researchToggled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            for (int i = 0; i < (int)technologies.size(); ++i) {
+                if (CheckCollisionPointRec(mouse, researchRect(i))) {
+                    researchTechnology(i);
+                    break;
+                }
+            }
+        }
         bool shopToggled = false;
         if (shopOpen && (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_ESCAPE))) {
             shopOpen = false;
             shopToggled = true;
-        } else if (!shopOpen && !contractsOpen && currentLocation == Location::Workshop &&
+        } else if (!shopOpen && !contractsOpen && !researchOpen && !researchToggled && currentLocation == Location::Workshop &&
                    !worldMapOpen && !inventoryOpen && !puncherOpen &&
                    !developerPanelOpen && !directionInputBlocked &&
                    !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
@@ -2356,7 +2450,7 @@ int main() {
         if (contractsOpen && (IsKeyPressed(KEY_B) || IsKeyPressed(KEY_ESCAPE))) {
             contractsOpen = false;
             contractToggled = true;
-        } else if (!contractsOpen && !shopOpen && !shopToggled && currentLocation == Location::Workshop &&
+        } else if (!contractsOpen && !shopOpen && !shopToggled && !researchOpen && !researchToggled && currentLocation == Location::Workshop &&
                    !worldMapOpen && !inventoryOpen && !puncherOpen &&
                    !developerPanelOpen && !directionInputBlocked &&
                    !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
@@ -2365,7 +2459,7 @@ int main() {
             contractsOpen = true;
             contractToggled = true;
         }
-        bool panelToggled = !contractsOpen && !contractToggled && !shopOpen && !shopToggled && IsKeyPressed(KEY_F1);
+        bool panelToggled = !contractsOpen && !contractToggled && !shopOpen && !shopToggled && !researchOpen && !researchToggled && IsKeyPressed(KEY_F1);
         if (contractsOpen && !contractToggled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             for (int i = 0; i < (int)contracts.size(); ++i) {
                 if (CheckCollisionPointRec(mouse, contractActionRect(i))) {
@@ -2432,7 +2526,8 @@ int main() {
         // На паузе рисуем мир, но не обновляем его состояние.
         if (!developerPanelOpen && !panelToggled &&
             !worldMapOpen && !locationSelectedThisFrame &&
-            !contractsOpen && !contractToggled && !shopOpen && !shopToggled) {
+            !contractsOpen && !contractToggled && !shopOpen && !shopToggled &&
+            !researchOpen && !researchToggled) {
             
             
             // ==========================================
@@ -3898,7 +3993,7 @@ int main() {
                 }
                 else if (CheckCollisionPointRec(mouse, cardButton) && woodCount >= 1) {
                     ingredients = {{ItemType::Wood, 1}};
-                    order = {ItemType::BlankCard, 1.0f};
+                    order = {ItemType::BlankCard, 1.0f, cardBatchSize};
                 }
                 else if (CheckCollisionPointRec(mouse, drillButton) && plateCount >= 3) {
                     ingredients = {{ItemType::IronPlate, 3}};
@@ -3952,17 +4047,7 @@ int main() {
                     }
                 }
 
-                if (craftTimer == 0.0f) {
-                    int remaining = addToInventory(
-                        inventory, INVENTORY_SIZE, craftQueue.front().result, 1
-                    );
-                    if (remaining == 0) {
-                        craftQueue.pop();
-                        if (!craftQueue.empty()) {
-                            craftTimer = craftQueue.front().duration;
-                        }
-                    }
-                }
+                if (craftTimer == 0.0f) finishCraftOrder();
             }
 
             // Проверяем место после крафта: готовый заказ мог занять свободный слот.
@@ -4343,7 +4428,7 @@ int main() {
         DrawText(TextFormat("Money: GBP %lld", money), 10, 60, 18, DARKGREEN);
         DrawText(TextFormat("XP: %lld", experiencePoints), 10, 82, 18, DARKBLUE);
         if (currentLocation == Location::Workshop) {
-            DrawText("B - CONTRACTS | S - SHOP", 10, 105, 16, DARKBLUE);
+            DrawText("B - CONTRACTS | S - SHOP | L - RESEARCH", 10, 105, 16, DARKBLUE);
         }
         
         
@@ -4804,7 +4889,7 @@ int main() {
 
                 if (shownCard != nullptr && shownCard->command == 1) {
 
-                    float progress = drill.hitTimer / 0.4f;
+                    float progress = drill.hitTimer / drillHitDuration;
                     if (progress < 0.0f) progress = 0.0f;
                     if (progress > 1.0f) progress = 1.0f;
 
@@ -4849,7 +4934,7 @@ int main() {
 
             DrawText("Blank Card", 620, 156, 18, WHITE);
             DrawRectangleRec(cardButton, woodCount >= 1 ? GREEN : GRAY);
-            DrawText("Craft Card", 625, 196, 16, WHITE);
+            DrawText(TextFormat("Craft Card x%i", cardBatchSize), 625, 196, 16, WHITE);
             DrawText(
                 TextFormat("Wood: %i/1", woodCount),
                 620, 175, 14, woodCount >= 1 ? GREEN : RED
@@ -5408,7 +5493,7 @@ int main() {
             drawRoute(250, "C - COAL MINE > WORKSHOP", coalToWorkshop.inTransit, coalToWorkshop.remaining, LIGHTGRAY);
             drawRoute(285, "I - COAL MINE > IRON MINE", coalToIronMine.inTransit, coalToIronMine.remaining, LIGHTGRAY);
             DrawText(autoCargoDelivery ? "A - AUTO: ON (ALL ROUTES)" : "A - AUTO: OFF (ALL ROUTES)", 30, 335, 19, autoCargoDelivery ? GREEN : YELLOW);
-            DrawText("10 units / 5 seconds per route", 30, 365, 17, WHITE);
+            DrawText(TextFormat("%i units / 5 seconds per route", CARGO_BATCH_SIZE), 30, 365, 17, WHITE);
             DrawText(mapNotice.c_str(), 30, 399, 15, YELLOW);
             DrawText("ESC - RETURN", 590, 395, 20, WHITE);
         }
@@ -5467,6 +5552,33 @@ int main() {
             }
             DrawText(shopNotice.c_str(), 28, 395, 16, YELLOW);
             DrawText("S / ESC - CLOSE", 580, 420, 16, WHITE);
+        }
+
+        // Исследовательская лаборатория: модальное окно поверх мира.
+        if (researchOpen) {
+            DrawRectangle(0, 0, 800, 450, Color{43, 35, 29, 255});
+            DrawText("RESEARCH LAB", 28, 15, 28, GOLD);
+            DrawText(TextFormat("GBP %lld | XP %lld", money, experiencePoints), 460, 22, 18, SKYBLUE);
+            DrawText("Research once. Upgrades apply to all locations.", 28, 56, 17, LIGHTGRAY);
+            for (int i = 0; i < (int)technologies.size(); ++i) {
+                const auto& t = technologies[i];
+                int y = 92 + i * 94;
+                const char* blocker = researchBlocker(i);
+                DrawRectangle(24, y, 752, 88, DARKGRAY);
+                DrawRectangleLines(24, y, 752, 88, t.unlocked ? GREEN : GRAY);
+                DrawText(t.name, 38, y + 7, 20, WHITE);
+                DrawText(t.description, 38, y + 31, 16, GOLD);
+                DrawText(TextFormat("GBP %i | %i XP | %s %i/%i", t.moneyCost, t.xpCost,
+                    t.materialName, contractInventoryAmount(t.material), t.materialCost), 38, y + 55, 16, LIGHTGRAY);
+                Rectangle action = researchRect(i);
+                DrawRectangleRec(action, t.unlocked ? DARKGREEN : blocker ? GRAY : DARKBLUE);
+                DrawRectangleLinesEx(action, 1, WHITE);
+                DrawText(t.unlocked ? "RESEARCHED" : blocker ? "LOCKED" : "RESEARCH", 565, (int)action.y + 12, 18, WHITE);
+                if (t.prerequisite >= 0 && !technologies[t.prerequisite].unlocked)
+                    DrawText("Needs Card manufacturing", 551, y + 67, 14, YELLOW);
+            }
+            DrawText(researchNotice.c_str(), 28, 390, 17, YELLOW);
+            DrawText("L / ESC - CLOSE", 580, 420, 16, WHITE);
         }
 
         EndDrawing();
