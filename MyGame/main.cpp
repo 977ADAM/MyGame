@@ -1,7 +1,6 @@
 
 #include <raylib.h>
 #include <algorithm>
-#include <bit>
 #include <queue>
 #include <string>
 #include <vector>
@@ -21,7 +20,6 @@ enum class ItemType {
     PunchedCard,
     IronPlate,
     Drill,
-    Roller,
     Chest
 };
 
@@ -90,8 +88,6 @@ Rectangle GetPunchHoleRect(int row, int column) {
     };
 }
 
-constexpr int TAKE_COMMAND = 4;
-constexpr int PUT_COMMAND = 5;
 constexpr int SET_COMMAND = 6;
 constexpr int ADD_COMMAND = 7;
 constexpr int SUB_COMMAND = 8;
@@ -121,9 +117,6 @@ const char* FormatCardCommand(int command, int argument) {
     const char* name = "UNKNOWN";
     if (command == 1) name = "RUN";
     else if (command == 2) name = "BACK";
-    else if (command == 3) name = "REVERSE";
-    else if (command == TAKE_COMMAND) name = "TAKE";
-    else if (command == PUT_COMMAND) name = "PUT";
     else if (command == SET_COMMAND) name = "SET";
     else if (command == ADD_COMMAND) name = "ADD";
     else if (command == SUB_COMMAND) name = "SUB";
@@ -144,164 +137,10 @@ void DrawPunchedCard(int x, int y, int command, int argument) {
     }
 }
 
-void DrawRollerItem(int x, int y) {
-    DrawRectangle(x, y, 36, 22, DARKBROWN);
-    for (int i = 0; i < 3; i++) {
-        DrawRectangle(x + 3 + i * 11, y + 3, 8, 16, LIGHTGRAY);
-    }
-}
-
-enum class RollerSide {
-    Left,
-    Right,
-    Up,
-    Down
-};
-
-struct RollerCell {
+struct CellPosition {
     int x;
     int y;
 };
-
-struct RollerEnd {
-    RollerCell cell;
-    RollerSide side;
-};
-
-struct RollerStep {
-    RollerCell cell;
-    RollerSide exitSide;
-};
-
-struct RollerDirectionChoice {
-    RollerEnd start;
-    Rectangle hitbox;
-};
-
-struct RollerLine {
-    std::vector<RollerCell> cells;
-    std::vector<RollerEnd> ends;
-};
-
-bool HasRollerCell(
-    const std::vector<RollerCell>& cells,
-    RollerCell target
-) {
-    for (const RollerCell& cell : cells) {
-        if (cell.x == target.x && cell.y == target.y) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool HasRollerSide(int shape, RollerSide side) {
-    // Порядок форм: ─ │ └ ┌ ┐ ┘
-    switch (side) {
-        case RollerSide::Left:
-            return shape == 0 || shape == 4 || shape == 5;
-        case RollerSide::Right:
-            return shape == 0 || shape == 2 || shape == 3;
-        case RollerSide::Up:
-            return shape == 1 || shape == 2 || shape == 5;
-        case RollerSide::Down:
-            return shape == 1 || shape == 3 || shape == 4;
-    }
-
-    return false;
-}
-
-RollerSide OppositeSide(RollerSide side) {
-    switch (side) {
-        case RollerSide::Left:  return RollerSide::Right;
-        case RollerSide::Right: return RollerSide::Left;
-        case RollerSide::Up:    return RollerSide::Down;
-        case RollerSide::Down:  return RollerSide::Up;
-    }
-    return RollerSide::Left;
-}
-
-RollerCell NeighborCell(RollerCell cell, RollerSide side) {
-    switch (side) {
-        case RollerSide::Left:  cell.x--; break;
-        case RollerSide::Right: cell.x++; break;
-        case RollerSide::Up:    cell.y--; break;
-        case RollerSide::Down:  cell.y++; break;
-    }
-    return cell;
-}
-
-RollerSide OtherRollerSide(int shape, RollerSide side) {
-    const RollerSide sides[] = {
-        RollerSide::Left, RollerSide::Right,
-        RollerSide::Up, RollerSide::Down
-    };
-    for (RollerSide candidate : sides) {
-        if (candidate != side && HasRollerSide(shape, candidate)) {
-            return candidate;
-        }
-    }
-    return side;
-}
-
-void DrawRollerArrow(RollerCell cell, RollerSide side, int tileSize) {
-    Vector2 center = {
-        cell.x * tileSize + tileSize / 2.0f,
-        cell.y * tileSize + tileSize / 2.0f
-    };
-    RollerCell neighbor = NeighborCell(cell, side);
-    Vector2 direction = {
-        (float)(neighbor.x - cell.x),
-        (float)(neighbor.y - cell.y)
-    };
-    Vector2 tip = {
-        center.x + direction.x * 6,
-        center.y + direction.y * 6
-    };
-    Vector2 tail = {
-        center.x - direction.x * 4,
-        center.y - direction.y * 4
-    };
-    Vector2 wingA = {
-        tip.x - direction.x * 3 - direction.y * 3,
-        tip.y - direction.y * 3 + direction.x * 3
-    };
-    Vector2 wingB = {
-        tip.x - direction.x * 3 + direction.y * 3,
-        tip.y - direction.y * 3 - direction.x * 3
-    };
-    DrawLineEx(tail, tip, 2, BLUE);
-    DrawLineEx(tip, wingA, 2, BLUE);
-    DrawLineEx(tip, wingB, 2, BLUE);
-}
-
-void DrawRollerTile(int x, int y, int shape, Color color) {
-    bool left  = HasRollerSide(shape, RollerSide::Left);
-    bool right = HasRollerSide(shape, RollerSide::Right);
-    bool up    = HasRollerSide(shape, RollerSide::Up);
-    bool down  = HasRollerSide(shape, RollerSide::Down);
-
-    Color base = Fade(color, 0.35f);
-
-    DrawRectangle(x + 6, y + 6, 8, 8, base);
-
-    if (left) {
-        DrawRectangle(x, y + 6, 6, 8, base);
-        DrawRectangle(x + 2, y + 6, 2, 8, color);
-    }
-    if (right) {
-        DrawRectangle(x + 14, y + 6, 6, 8, base);
-        DrawRectangle(x + 16, y + 6, 2, 8, color);
-    }
-    if (up) {
-        DrawRectangle(x + 6, y, 8, 6, base);
-        DrawRectangle(x + 6, y + 2, 8, 2, color);
-    }
-    if (down) {
-        DrawRectangle(x + 6, y + 14, 8, 6, base);
-        DrawRectangle(x + 6, y + 16, 8, 2, color);
-    }
-}
 
 struct DeveloperItem {
     ItemType type;
@@ -316,7 +155,6 @@ const DeveloperItem developerItems[] = {
     {ItemType::IronPlate, "Iron Plate"},
     {ItemType::Furnace,   "Furnace"},
     {ItemType::Drill,     "Drill"},
-    {ItemType::Roller,    "Roller"},
     {ItemType::BlankCard, "Blank Card"}
 };
 
@@ -356,8 +194,7 @@ int main() {
     
     // Открыта ли карта мира
     bool worldMapOpen = false;
-    
-    
+
     // Грузовой склад железной шахты
     int mineCargoIron = 0;
 
@@ -473,7 +310,6 @@ int main() {
         Boulder,
         Tree,
         Furnace,
-        Roller,
         Chest,
         CargoStation
     };
@@ -511,9 +347,6 @@ int main() {
         }
         else if (item.type == ItemType::Drill) {
             DrawRectangle(slotX + 15, slotY + 10, 30, 30, PURPLE);
-        }
-        else if (item.type == ItemType::Roller) {
-            DrawRollerItem(slotX + 12, slotY + 15);
         }
         else if (item.type == ItemType::Chest) {
             DrawChestItem(slotX + 13, slotY + 13);
@@ -661,7 +494,6 @@ int main() {
         {ItemType::Stone, "Stone", 1, 2, 8, false},
         {ItemType::Furnace, "Furnaces", 1, 1, 35, true},
         {ItemType::Drill, "Drills", 1, 3, 40, true},
-        {ItemType::Roller, "Rollers", 1, 4, 18, true},
         {ItemType::Chest, "Chests", 1, 2, 25, true},
         {ItemType::BlankCard, "Blank cards", 1, 4, 8, true}
     };
@@ -689,7 +521,7 @@ int main() {
         // В первой строке — ресурс, во второй — изделие,
         // третья строка выбирает любую категорию.
         const int productIndex = index == 0 ? randomInt(0, 4) :
-            (index == 1 ? randomInt(5, 9) : randomInt(0, 9));
+            (index == 1 ? randomInt(5, 8) : randomInt(0, 8));
         const ContractProduct& product = contractProducts[productIndex];
         Contract c;
         c.id = nextContractId++;
@@ -820,7 +652,7 @@ int main() {
     };
     const ShopProduct shopProducts[] = {
         {0, 5, 4}, {1, 5, 3}, {2, 5, 11}, {3, 5, 7}, {4, 5, 11},
-        {5, 1, 45}, {6, 1, 51}, {7, 1, 23}, {8, 1, 32}, {9, 1, 11}
+        {5, 1, 45}, {6, 1, 51}, {7, 1, 32}, {8, 1, 11}
     };
     constexpr int SHOP_PRODUCT_COUNT = sizeof(shopProducts) / sizeof(shopProducts[0]);
     std::string shopNotice = "Choose a product to buy a pack.";
@@ -866,7 +698,6 @@ int main() {
         return {548, (float)(150 + index * 92), 200, 24};
     };
 
-    
     // Mechanical computing prototype: one workshop register, one physical card reader.
     bool registerOpen = false;
     int registerValue = 0;
@@ -974,257 +805,8 @@ int main() {
     static TileType workshopGrid[ROWS][COLS] = {};
     auto* grid = workshopGrid;
     const int LARGE_BUILDING_SIZE = 2;
-    static RollerCell workshopBuildingOrigins[ROWS][COLS] = {};
+    static CellPosition workshopBuildingOrigins[ROWS][COLS] = {};
     auto* buildingOrigins = workshopBuildingOrigins;
-    static int workshopRollerShapes[ROWS][COLS] = {};
-    auto* rollerShapes = workshopRollerShapes;
-    static bool workshopRollerControllers[ROWS][COLS] = {};
-    auto* rollerControllers = workshopRollerControllers;
-    static InventorySlot workshopRollerFuel[ROWS][COLS] = {};
-    auto* rollerFuel = workshopRollerFuel;
-    static InventorySlot workshopRollerReaders[ROWS][COLS] = {};
-    auto* rollerReaders = workshopRollerReaders;
-    static InventorySlot workshopRollerCargo[ROWS][COLS] = {};
-    auto* rollerCargo = workshopRollerCargo;
-    struct RollerProgram {
-        int energy = 0;
-        int completedActions = 0;
-        int cardIndex = 0;
-        float commandTimer = 0.0f;
-        const char* status = "Insert card";
-        std::vector<RollerCell> lineCells;
-        bool lineBroken = false;
-        int numberedSlotCommand = 0;
-        RollerEnd numberedSlotEnd = {};
-    };
-    static RollerProgram workshopRollerPrograms[ROWS][COLS] = {};
-    auto* rollerPrograms = workshopRollerPrograms;
-    static bool workshopRollerDirectionSet[ROWS][COLS] = {};
-    auto* rollerDirectionSet = workshopRollerDirectionSet;
-    static RollerSide workshopRollerEntrySides[ROWS][COLS] = {};
-    auto* rollerEntrySides = workshopRollerEntrySides;
-    struct RollerSlots {
-        unsigned int numbered = 0;
-        bool automatic = false;
-
-        bool configured() const {
-            return automatic || numbered != 0;
-        }
-
-        bool includes(int slot) const {
-            return automatic || (numbered & (1u << (slot - 1))) != 0;
-        }
-    };
-    static RollerSlots workshopRollerEndSlots[ROWS][COLS][4] = {};
-    auto* rollerEndSlots = workshopRollerEndSlots;
-    auto getRollerEndSlots = [&](RollerEnd end) -> RollerSlots& {
-        return rollerEndSlots[end.cell.y][end.cell.x][static_cast<int>(end.side)];
-    };
-    auto isRollerConnected = [&](int col, int row, RollerSide side) {
-        if (col < 0 || col >= COLS || row < 0 || row >= ROWS) {
-            return false;
-        }
-
-        if (grid[row][col] != TileType::Roller ||
-            !HasRollerSide(rollerShapes[row][col], side)) {
-            return false;
-        }
-
-        int neighborX = col;
-        int neighborY = row;
-        RollerSide opposite = RollerSide::Right;
-
-        switch (side) {
-            case RollerSide::Left:
-                neighborX--;
-                opposite = RollerSide::Right;
-                break;
-            case RollerSide::Right:
-                neighborX++;
-                opposite = RollerSide::Left;
-                break;
-            case RollerSide::Up:
-                neighborY--;
-                opposite = RollerSide::Down;
-                break;
-            case RollerSide::Down:
-                neighborY++;
-                opposite = RollerSide::Up;
-                break;
-        }
-
-        if (neighborX < 0 || neighborX >= COLS ||
-            neighborY < 0 || neighborY >= ROWS) {
-            return false;
-        }
-
-        return grid[neighborY][neighborX] == TileType::Roller &&
-            HasRollerSide(rollerShapes[neighborY][neighborX], opposite);
-    };
-
-    auto getRollerLine = [&](int startX, int startY) {
-        RollerLine line;
-
-        if (startX < 0 || startX >= COLS ||
-            startY < 0 || startY >= ROWS ||
-            grid[startY][startX] != TileType::Roller) {
-            return line;
-        }
-
-        const RollerSide sides[] = {
-            RollerSide::Left, RollerSide::Right,
-            RollerSide::Up, RollerSide::Down
-        };
-        const int dx[] = {-1, 1, 0, 0};
-        const int dy[] = {0, 0, -1, 1};
-
-        bool visited[ROWS][COLS] = {};
-        visited[startY][startX] = true;
-        line.cells.push_back({startX, startY});
-
-        for (int i = 0; i < (int)line.cells.size(); i++) {
-            // Копируем клетку: push_back может переместить массив.
-            RollerCell cell = line.cells[i];
-
-            for (int direction = 0; direction < 4; direction++) {
-                RollerSide side = sides[direction];
-
-                if (!HasRollerSide(
-                        rollerShapes[cell.y][cell.x], side)) {
-                    continue;
-                }
-
-                if (!isRollerConnected(cell.x, cell.y, side)) {
-                    line.ends.push_back({cell, side});
-                    continue;
-                }
-
-                int nextX = cell.x + dx[direction];
-                int nextY = cell.y + dy[direction];
-
-                if (!visited[nextY][nextX]) {
-                    visited[nextY][nextX] = true;
-                    line.cells.push_back({nextX, nextY});
-                }
-            }
-        }
-
-        return line;
-    };
-
-    auto getDirectedLine = [&](RollerEnd start) {
-        std::vector<RollerStep> route;
-        bool visited[ROWS][COLS] = {};
-        RollerCell cell = start.cell;
-        RollerSide entrySide = start.side;
-        const RollerSide sides[] = {
-            RollerSide::Left, RollerSide::Right,
-            RollerSide::Up, RollerSide::Down
-        };
-
-        while (cell.x >= 0 && cell.x < COLS &&
-               cell.y >= 0 && cell.y < ROWS &&
-               grid[cell.y][cell.x] == TileType::Roller &&
-               !visited[cell.y][cell.x]) {
-            int shape = rollerShapes[cell.y][cell.x];
-            if (!HasRollerSide(shape, entrySide)) {
-                break;
-            }
-            visited[cell.y][cell.x] = true;
-            RollerSide exitSide = entrySide;
-            for (RollerSide side : sides) {
-                if (side != entrySide && HasRollerSide(shape, side)) {
-                    exitSide = side;
-                    break;
-                }
-            }
-            route.push_back({cell, exitSide});
-            if (!isRollerConnected(cell.x, cell.y, exitSide)) {
-                break;
-            }
-            cell = NeighborCell(cell, exitSide);
-            entrySide = OppositeSide(exitSide);
-        }
-        return route;
-    };
-
-    auto getDirectionChoices = [&](int controllerX, int controllerY) {
-        std::vector<RollerDirectionChoice> choices;
-        RollerLine line = getRollerLine(controllerX, controllerY);
-        if (line.cells.empty()) {
-            return choices;
-        }
-        if (!line.ends.empty()) {
-            for (const RollerEnd& end : line.ends) {
-                Rectangle hitbox = {
-                    (float)(end.cell.x * TILE_SIZE),
-                    (float)(end.cell.y * TILE_SIZE),
-                    (float)TILE_SIZE, (float)TILE_SIZE
-                };
-                if (line.cells.size() == 1) {
-                    RollerCell neighbor = NeighborCell(end.cell, end.side);
-                    float markerX = hitbox.x + TILE_SIZE / 2.0f +
-                        (neighbor.x - end.cell.x) * 7;
-                    float markerY = hitbox.y + TILE_SIZE / 2.0f +
-                        (neighbor.y - end.cell.y) * 7;
-                    hitbox = {markerX - 3, markerY - 3, 6, 6};
-                }
-                choices.push_back({end, hitbox});
-            }
-        }
-        else {
-            const RollerSide sides[] = {
-                RollerSide::Left, RollerSide::Right,
-                RollerSide::Up, RollerSide::Down
-            };
-            RollerCell controller = {controllerX, controllerY};
-            int shape = rollerShapes[controllerY][controllerX];
-            for (RollerSide exitSide : sides) {
-                if (!isRollerConnected(controllerX, controllerY, exitSide)) {
-                    continue;
-                }
-                RollerCell neighbor = NeighborCell(controller, exitSide);
-                RollerSide entrySide = OtherRollerSide(shape, exitSide);
-                choices.push_back({
-                    {controller, entrySide},
-                    {
-                        (float)(neighbor.x * TILE_SIZE),
-                        (float)(neighbor.y * TILE_SIZE),
-                        (float)TILE_SIZE, (float)TILE_SIZE
-                    }
-                });
-            }
-        }
-        return choices;
-    };
-
-    auto getControllerRoute = [&](int col, int row) {
-        RollerSide entrySide = rollerEntrySides[row][col];
-        int shape = rollerShapes[row][col];
-        auto backward = getDirectedLine({
-            {col, row}, OtherRollerSide(shape, entrySide)
-        });
-        if (backward.empty()) {
-            return std::vector<RollerStep>{};
-        }
-        const RollerStep& last = backward.back();
-        if (!isRollerConnected(last.cell.x, last.cell.y, last.exitSide)) {
-            return getDirectedLine({last.cell, last.exitSide});
-        }
-        return getDirectedLine({{col, row}, entrySide});
-    };
-
-    auto getRouteEnd = [&](const std::vector<RollerStep>& route, bool source) -> RollerEnd {
-        if (!source) {
-            return {route.back().cell, route.back().exitSide};
-        }
-
-        const RollerStep& first = route.front();
-        return {
-            first.cell,
-            OtherRollerSide(rollerShapes[first.cell.y][first.cell.x], first.exitSide)
-        };
-    };
 
     static TileType workshopDrillDeposits[ROWS][COLS] = {};
     auto* drillDeposits = workshopDrillDeposits;
@@ -1239,8 +821,7 @@ int main() {
     // Прочность и количество ресурсов в шахте
     static int ironMineDurability[ROWS][COLS] = {};
     static int ironMineResourceAmount[ROWS][COLS] = {};
-    
-    
+
     // Создаём месторождение железа в шахте
     for (int row = 8; row <= 12; row++) {
         for (int col = 18; col <= 23; col++) {
@@ -1286,11 +867,11 @@ int main() {
     };
 
     auto isBuildingOrigin = [&](int col, int row) {
-        const RollerCell origin = buildingOrigins[row][col];
+        const CellPosition origin = buildingOrigins[row][col];
         return origin.x == col && origin.y == row;
     };
 
-    auto placeLargeBuilding = [&](RollerCell origin, TileType type) {
+    auto placeLargeBuilding = [&](CellPosition origin, TileType type) {
         for (int row = origin.y; row < origin.y + LARGE_BUILDING_SIZE; row++) {
             for (int col = origin.x; col < origin.x + LARGE_BUILDING_SIZE; col++) {
                 if (type == TileType::Drill) {
@@ -1302,7 +883,7 @@ int main() {
         }
     };
 
-    auto removeLargeBuilding = [&](RollerCell origin) {
+    auto removeLargeBuilding = [&](CellPosition origin) {
         for (int row = origin.y; row < origin.y + LARGE_BUILDING_SIZE; row++) {
             for (int col = origin.x; col < origin.x + LARGE_BUILDING_SIZE; col++) {
                 grid[row][col] = resourceAmount[row][col] > 0
@@ -1319,16 +900,16 @@ int main() {
         return ItemType::Empty;
     };
 
-    auto findDrillDeposit = [&](RollerCell origin, bool includeDepleted = false) {
+    auto findDrillDeposit = [&](CellPosition origin, bool includeDepleted = false) {
         for (int row = origin.y; row < origin.y + LARGE_BUILDING_SIZE; row++) {
             for (int col = origin.x; col < origin.x + LARGE_BUILDING_SIZE; col++) {
                 if (drillDeposits[row][col] != TileType::Empty &&
                     (includeDepleted || resourceAmount[row][col] > 0)) {
-                    return RollerCell{col, row};
+                    return CellPosition{col, row};
                 }
             }
         }
-        return RollerCell{-1, -1};
+        return CellPosition{-1, -1};
     };
 
     struct FurnaceStorage {
@@ -1369,29 +950,13 @@ int main() {
     };
     static ChestStorage workshopChests[ROWS][COLS] = {};
     auto* chests = workshopChests;
-    
-    
+
     // ==========================================
     // IRON MINE — Данные механизмов шахты
     // ==========================================
 
     // Расположение крупных построек
-    static RollerCell ironMineBuildingOrigins[ROWS][COLS] = {};
-
-    // Роликовые транспортёры
-    static int ironMineRollerShapes[ROWS][COLS] = {};
-    static bool ironMineRollerControllers[ROWS][COLS] = {};
-
-    static InventorySlot ironMineRollerFuel[ROWS][COLS] = {};
-    static InventorySlot ironMineRollerReaders[ROWS][COLS] = {};
-    static InventorySlot ironMineRollerCargo[ROWS][COLS] = {};
-
-    static RollerProgram ironMineRollerPrograms[ROWS][COLS] = {};
-
-    static bool ironMineRollerDirectionSet[ROWS][COLS] = {};
-    static RollerSide ironMineRollerEntrySides[ROWS][COLS] = {};
-
-    static RollerSlots ironMineRollerEndSlots[ROWS][COLS][4] = {};
+    static CellPosition ironMineBuildingOrigins[ROWS][COLS] = {};
 
     // Буры и месторождения под ними
     static TileType ironMineDrillDeposits[ROWS][COLS] = {};
@@ -1404,311 +969,19 @@ int main() {
     static ChestStorage ironMineChests[ROWS][COLS] = {};
 
     // Независимые механизмы угольной шахты.
-    static RollerCell coalMineBuildingOrigins[ROWS][COLS] = {};
-    static int coalMineRollerShapes[ROWS][COLS] = {};
-    static bool coalMineRollerControllers[ROWS][COLS] = {};
-    static InventorySlot coalMineRollerFuel[ROWS][COLS] = {};
-    static InventorySlot coalMineRollerReaders[ROWS][COLS] = {};
-    static InventorySlot coalMineRollerCargo[ROWS][COLS] = {};
-    static RollerProgram coalMineRollerPrograms[ROWS][COLS] = {};
-    static bool coalMineRollerDirectionSet[ROWS][COLS] = {};
-    static RollerSide coalMineRollerEntrySides[ROWS][COLS] = {};
-    static RollerSlots coalMineRollerEndSlots[ROWS][COLS][4] = {};
+    static CellPosition coalMineBuildingOrigins[ROWS][COLS] = {};
     static TileType coalMineDrillDeposits[ROWS][COLS] = {};
     static DrillStorage coalMineDrills[ROWS][COLS] = {};
     static FurnaceStorage coalMineFurnaces[ROWS][COLS] = {};
     static ChestStorage coalMineChests[ROWS][COLS] = {};
 
     // Независимые механизмы лесной территории.
-    static RollerCell woodlandBuildingOrigins[ROWS][COLS] = {};
-    static int woodlandRollerShapes[ROWS][COLS] = {};
-    static bool woodlandRollerControllers[ROWS][COLS] = {};
-    static InventorySlot woodlandRollerFuel[ROWS][COLS] = {};
-    static InventorySlot woodlandRollerReaders[ROWS][COLS] = {};
-    static InventorySlot woodlandRollerCargo[ROWS][COLS] = {};
-    static RollerProgram woodlandRollerPrograms[ROWS][COLS] = {};
-    static bool woodlandRollerDirectionSet[ROWS][COLS] = {};
-    static RollerSide woodlandRollerEntrySides[ROWS][COLS] = {};
-    static RollerSlots woodlandRollerEndSlots[ROWS][COLS][4] = {};
+    static CellPosition woodlandBuildingOrigins[ROWS][COLS] = {};
     static TileType woodlandDrillDeposits[ROWS][COLS] = {};
     static DrillStorage woodlandDrills[ROWS][COLS] = {};
     static FurnaceStorage woodlandFurnaces[ROWS][COLS] = {};
     static ChestStorage woodlandChests[ROWS][COLS] = {};
 
-    auto getBuildingSlotCount = [&](RollerCell cell) {
-        if (cell.x < 0 || cell.x >= COLS ||
-            cell.y < 0 || cell.y >= ROWS) {
-            return 0;
-        }
-
-        if (grid[cell.y][cell.x] == TileType::Furnace) {
-            return 3;
-        }
-        if (grid[cell.y][cell.x] == TileType::Drill) {
-            return 2;
-        }
-        if (grid[cell.y][cell.x] == TileType::Chest) {
-            return CHEST_SIZE;
-        }
-        if (grid[cell.y][cell.x] == TileType::CargoStation) {
-            return currentLocation == Location::CoalMine ? 1 : 2;
-        }
-
-        return 0;
-    };
-
-    auto getBuildingSlot = [&](RollerCell cell, int slot) -> InventorySlot* {
-        if (cell.x < 0 || cell.x >= COLS ||
-            cell.y < 0 || cell.y >= ROWS) {
-            return nullptr;
-        }
-
-        if (grid[cell.y][cell.x] == TileType::Furnace) {
-            const RollerCell origin = buildingOrigins[cell.y][cell.x];
-            FurnaceStorage& furnace = furnaces[origin.y][origin.x];
-            if (slot == 1) return &furnace.ore;
-            if (slot == 2) return &furnace.fuel;
-            if (slot == 3) return &furnace.output;
-        }
-        else if (grid[cell.y][cell.x] == TileType::Drill) {
-            const RollerCell origin = buildingOrigins[cell.y][cell.x];
-            DrillStorage& drill = drills[origin.y][origin.x];
-            if (slot == 1) return &drill.fuel;
-            if (slot == 2) return &drill.output;
-        }
-        else if (grid[cell.y][cell.x] == TileType::Chest &&
-                 slot >= 1 && slot <= CHEST_SIZE) {
-            const RollerCell origin = buildingOrigins[cell.y][cell.x];
-            return &chests[origin.y][origin.x].slots[slot - 1];
-        }
-
-        return nullptr;
-    };
-
-    auto getAcceptedItem = [&](RollerCell cell, int slot) {
-        if (grid[cell.y][cell.x] == TileType::Furnace) {
-            if (slot == 1) return ItemType::IronOre;
-            if (slot == 2) return ItemType::Coal;
-            if (slot == 3) return ItemType::IronPlate;
-        }
-        else if (grid[cell.y][cell.x] == TileType::Drill) {
-            if (slot == 1) return ItemType::Coal;
-            if (slot == 2) {
-                const RollerCell origin = buildingOrigins[cell.y][cell.x];
-                const InventorySlot& output = drills[origin.y][origin.x].output;
-                if (output.amount > 0) {
-                    return output.type;
-                }
-
-                RollerCell deposit = findDrillDeposit(origin);
-                if (deposit.x == -1) {
-                    // После исчерпания выход сохраняет тип первой залежи.
-                    deposit = findDrillDeposit(origin, true);
-                }
-                if (deposit.x != -1) {
-                    return getDepositItem(drillDeposits[deposit.y][deposit.x]);
-                }
-            }
-        }
-
-        return ItemType::Empty;
-    };
-
-    auto canCarryOnRoller = [](ItemType type) {
-        return type == ItemType::IronOre || type == ItemType::Coal ||
-            type == ItemType::Stone || type == ItemType::Wood ||
-            type == ItemType::IronPlate;
-    };
-
-    auto getRollerEndError = [&](RollerEnd end) -> const char* {
-        const RollerSlots& slots = getRollerEndSlots(end);
-        if (!slots.configured()) {
-            return "SLOT NOT SET";
-        }
-
-        const RollerCell building = NeighborCell(end.cell, end.side);
-        const int slotCount = getBuildingSlotCount(building);
-        if (slotCount == 0) {
-            return "NO BUILDING CONNECTED";
-        }
-
-        if (slots.numbered >= (1u << slotCount) ||
-            (grid[building.y][building.x] != TileType::Chest &&
-             (slots.automatic || std::popcount(slots.numbered) > 1))) {
-            return "INVALID SLOT";
-        }
-
-        return nullptr;
-    };
-
-    auto unloadRollerCargo = [&](RollerEnd end) {
-        InventorySlot& cargo = rollerCargo[end.cell.y][end.cell.x];
-        if (cargo.amount == 0) {
-            return false;
-        }
-
-        const RollerSlots& slots = getRollerEndSlots(end);
-        const RollerCell building = NeighborCell(end.cell, end.side);
-        const int slotCount = getBuildingSlotCount(building);
-        if (slotCount == 0) {
-            return false;
-        }
-
-        // Слот 1 принимает добытый ресурс своей шахты.
-        if (grid[building.y][building.x] == TileType::CargoStation) {
-            if (!slots.includes(1)) return false;
-            int* stock = nullptr;
-            int capacity = 0;
-            if (currentLocation == Location::IronMine && cargo.type == ItemType::IronOre) {
-                stock = &mineCargoIron;
-                capacity = MINE_CARGO_CAPACITY;
-            } else if (currentLocation == Location::CoalMine && cargo.type == ItemType::Coal) {
-                stock = &coalMineCargo;
-                capacity = COAL_CARGO_CAPACITY;
-            }
-            if (!stock || *stock >= capacity) return false;
-            ++*stock;
-            if (--cargo.amount == 0) cargo = {};
-            return true;
-        }
-
-        const bool isChest = grid[building.y][building.x] == TileType::Chest;
-        InventorySlot* target = nullptr;
-        for (int slot = 1; slot <= slotCount; slot++) {
-            if (!slots.includes(slot) ||
-                (!isChest && getAcceptedItem(building, slot) != cargo.type)) {
-                continue;
-            }
-
-            InventorySlot* candidate = getBuildingSlot(building, slot);
-            if (candidate->amount == 0 && target == nullptr) {
-                target = candidate;
-            }
-            if (candidate->amount > 0 && candidate->type == cargo.type &&
-                candidate->amount < GetMaxStack(cargo.type)) {
-                target = candidate;
-                break;
-            }
-        }
-
-        if (target == nullptr) {
-            return false;
-        }
-
-        target->type = cargo.type;
-        target->amount++;
-        cargo = {};
-        return true;
-    };
-
-    auto loadRollerCargo = [&](RollerEnd end) {
-        InventorySlot& cargo = rollerCargo[end.cell.y][end.cell.x];
-        if (cargo.amount > 0) {
-            return false;
-        }
-
-        const RollerSlots& slots = getRollerEndSlots(end);
-        const RollerCell building = NeighborCell(end.cell, end.side);
-        const int slotCount = getBuildingSlotCount(building);
-
-        // Мастерская: слот 1 — железо, слот 2 — уголь.
-        // Железная шахта: слот 2 выдаёт привезённый уголь.
-        if (slotCount > 0 && grid[building.y][building.x] == TileType::CargoStation) {
-            int* stock = nullptr;
-            ItemType type = ItemType::Empty;
-            if (currentLocation == Location::Workshop && slots.includes(1)) {
-                stock = &workshopCargoIron;
-                type = ItemType::IronOre;
-            } else if (currentLocation == Location::Workshop && slots.includes(2)) {
-                stock = &workshopCargoCoal;
-                type = ItemType::Coal;
-            } else if (currentLocation == Location::IronMine && slots.includes(2)) {
-                stock = &ironMineCargoCoal;
-                type = ItemType::Coal;
-            }
-            if (!stock || *stock <= 0) return false;
-            cargo.type = type;
-            cargo.amount = 1;
-            --*stock;
-            return true;
-        }
-
-        for (int slot = 1; slot <= slotCount; slot++) {
-            if (!slots.includes(slot)) {
-                continue;
-            }
-
-            InventorySlot& source = *getBuildingSlot(building, slot);
-            if (source.amount == 0 || !canCarryOnRoller(source.type)) {
-                continue;
-            }
-
-            cargo.type = source.type;
-            cargo.amount = 1;
-            source.amount--;
-            if (source.amount == 0) {
-                source = {};
-            }
-            return true;
-        }
-
-        return false;
-    };
-
-    auto moveLoopCargo = [&](const std::vector<RollerStep>& route) {
-        int count = (int)route.size();
-        if (count == 0) {
-            return false;
-        }
-
-        std::vector<InventorySlot> previous;
-        previous.reserve(count);
-
-        bool hasEmpty = false;
-        for (const RollerStep& step : route) {
-            const InventorySlot& cargo =
-                rollerCargo[step.cell.y][step.cell.x];
-            previous.push_back(cargo);
-            if (cargo.amount == 0) {
-                hasEmpty = true;
-            }
-        }
-
-        if (!hasEmpty) {
-            return false;
-        }
-
-        std::vector<InventorySlot> next = previous;
-        bool moved = false;
-
-        for (int empty = 0; empty < count; empty++) {
-            if (previous[empty].amount > 0) {
-                continue;
-            }
-
-            int to = empty;
-            int from = (to + count - 1) % count;
-
-            while (previous[from].amount > 0) {
-                next[to] = previous[from];
-                next[from] = {};
-                moved = true;
-
-                to = from;
-                from = (from + count - 1) % count;
-            }
-        }
-
-        if (moved) {
-            for (int i = 0; i < count; i++) {
-                RollerCell cell = route[i].cell;
-                rollerCargo[cell.y][cell.x] = next[i];
-            }
-        }
-
-        return moved;
-    };
-    
     // CARGO STATION — клетки станции в обеих локациях
     for (int row = 14; row < 17; row++) {
         for (int col = 34; col < 37; col++) {
@@ -1771,9 +1044,7 @@ int main() {
     TileType selectedTile = TileType::Wall;
     bool placingFurnace = false;
     bool placingDrill = false;
-    bool placingRoller = false;
     bool placingChest = false;
-    int selectedRollerShape = 0;
     
     float miningCooldown = 0.0f;
     float hitAnimationTimer = 0.0f;
@@ -1789,16 +1060,11 @@ int main() {
     int openedFurnaceY = -1;
     int openedDrillX = -1;
     int openedDrillY = -1;
-    int openedRollerX = -1;
-    int openedRollerY = -1;
-    RollerCell openedChest = {-1, -1};
+    CellPosition openedChest = {-1, -1};
     int selectedChestSlot = -1;
 
-    int choosingControllerX = -1;
-    int choosingControllerY = -1;
     bool developerPanelOpen = false;
-    
-    
+
     // ==========================================
     // LOCATION — Выбор активных массивов без копирования
     // ==========================================
@@ -1823,17 +1089,6 @@ int main() {
         // Крупные постройки
         buildingOrigins = inWoodland ? woodlandBuildingOrigins : inCoal ? coalMineBuildingOrigins : (inMine ? ironMineBuildingOrigins : workshopBuildingOrigins);
 
-        // Роликовые линии
-        rollerShapes = inWoodland ? woodlandRollerShapes : inCoal ? coalMineRollerShapes : (inMine ? ironMineRollerShapes : workshopRollerShapes);
-        rollerControllers = inWoodland ? woodlandRollerControllers : inCoal ? coalMineRollerControllers : (inMine ? ironMineRollerControllers : workshopRollerControllers);
-        rollerFuel = inWoodland ? woodlandRollerFuel : inCoal ? coalMineRollerFuel : (inMine ? ironMineRollerFuel : workshopRollerFuel);
-        rollerReaders = inWoodland ? woodlandRollerReaders : inCoal ? coalMineRollerReaders : (inMine ? ironMineRollerReaders : workshopRollerReaders);
-        rollerCargo = inWoodland ? woodlandRollerCargo : inCoal ? coalMineRollerCargo : (inMine ? ironMineRollerCargo : workshopRollerCargo);
-        rollerPrograms = inWoodland ? woodlandRollerPrograms : inCoal ? coalMineRollerPrograms : (inMine ? ironMineRollerPrograms : workshopRollerPrograms);
-        rollerDirectionSet = inWoodland ? woodlandRollerDirectionSet : inCoal ? coalMineRollerDirectionSet : (inMine ? ironMineRollerDirectionSet : workshopRollerDirectionSet);
-        rollerEntrySides = inWoodland ? woodlandRollerEntrySides : inCoal ? coalMineRollerEntrySides : (inMine ? ironMineRollerEntrySides : workshopRollerEntrySides);
-        rollerEndSlots = inWoodland ? woodlandRollerEndSlots : inCoal ? coalMineRollerEndSlots : (inMine ? ironMineRollerEndSlots : workshopRollerEndSlots);
-
         // Месторождения под бурами
         drillDeposits = inWoodland ? woodlandDrillDeposits : inCoal ? coalMineDrillDeposits : (inMine ? ironMineDrillDeposits : workshopDrillDeposits);
 
@@ -1845,7 +1100,6 @@ int main() {
         // Запоминаем выбранную локацию
         currentLocation = destination;
     };
-
 
     // ==========================================
     // SIMULATION — Производство независимо от игрока
@@ -1972,7 +1226,7 @@ int main() {
                 const CardInstruction& instruction =
                     drill.reader.cards[drill.cardIndex];
 
-                RollerCell deposit = {-1, -1};
+                CellPosition deposit = {-1, -1};
                 ItemType resource = ItemType::Empty;
                 if (instruction.command == 1) {
                     deposit = findDrillDeposit({col, row});
@@ -2069,271 +1323,6 @@ int main() {
             }
         }
 
-        // Исполнение программы роликовой линии.
-        for (int row = 0; row < ROWS; row++) {
-            for (int col = 0; col < COLS; col++) {
-                if (grid[row][col] != TileType::Roller ||
-                    !rollerControllers[row][col]) {
-                    continue;
-                }
-                RollerProgram& program = rollerPrograms[row][col];
-                const InventorySlot& reader = rollerReaders[row][col];
-                InventorySlot& fuel = rollerFuel[row][col];
-                if (!rollerDirectionSet[row][col]) {
-                    program.status = "Set direction";
-                    continue;
-                }
-                RollerLine line = getRollerLine(col, row);
-                int controllerCount = 0;
-                for (const RollerCell& cell : line.cells) {
-                    if (rollerControllers[cell.y][cell.x]) {
-                        controllerCount++;
-                    }
-                }
-                if (program.lineCells.empty()) {
-                    program.lineCells = line.cells;
-                }
-
-                bool missingCell = false;
-                for (const RollerCell& expected : program.lineCells) {
-                    if (!HasRollerCell(line.cells, expected)) {
-                        missingCell = true;
-                        break;
-                    }
-                }
-
-                if (missingCell) {
-                    program.lineBroken = true;
-                }
-
-                if (program.lineBroken) {
-                    if (missingCell) {
-                        program.status = "LINE BROKEN";
-                        continue;
-                    }
-
-                    program.lineBroken = false;
-                    program.lineCells = line.cells;
-                }
-
-                if (controllerCount == 1) {
-                    program.lineCells = line.cells;
-                }
-
-                if (controllerCount > 1) {
-                    program.status = "CONFLICT";
-                    continue;
-                }
-                if (reader.amount == 0) {
-                    program.status = "Insert card";
-                    continue;
-                }
-                if (program.cardIndex >= (int)reader.cards.size()) {
-                    program.numberedSlotCommand = 0;
-                    program.status = "Done";
-                    continue;
-                }
-                const CardInstruction& instruction =
-                    reader.cards[program.cardIndex];
-                const bool configuringSlots = instruction.command == TAKE_COMMAND ||
-                    instruction.command == PUT_COMMAND;
-                if (!configuringSlots) {
-                    program.numberedSlotCommand = 0;
-                }
-
-                if (instruction.command == 1) {
-                    bool isLoop = line.ends.empty();
-
-                    auto route = getControllerRoute(col, row);
-                    if (route.empty()) {
-                        program.status = "LINE BROKEN";
-                        continue;
-                    }
-
-                    RollerEnd sourceEnd = {};
-                    RollerEnd targetEnd = {};
-
-                    if (!isLoop) {
-                        sourceEnd = getRouteEnd(route, true);
-                        targetEnd = getRouteEnd(route, false);
-                        const char* connectionError = getRollerEndError(sourceEnd);
-                        if (connectionError == nullptr) {
-                            connectionError = getRollerEndError(targetEnd);
-                        }
-                        if (connectionError != nullptr) {
-                            program.status = connectionError;
-                            continue;
-                        }
-                    }
-
-                    if (program.energy == 0) {
-                        if (fuel.amount == 0) {
-                            program.status = "FUEL EXHAUSTED";
-                            continue;
-                        }
-                        fuel.amount--;
-                        if (fuel.amount == 0) {
-                            fuel = {};
-                        }
-                        program.energy = 20;
-                    }
-
-                    program.status = "Running";
-                    program.commandTimer += dt;
-                    if (program.commandTimer < 0.5f) {
-                        continue;
-                    }
-
-                    bool moved = isLoop && moveLoopCargo(route);
-
-                    if (!isLoop) {
-                        if (unloadRollerCargo(targetEnd)) {
-                            moved = true;
-                        }
-
-                        for (int i = (int)route.size() - 1; i > 0; i--) {
-                            RollerCell from = route[i - 1].cell;
-                            RollerCell to = route[i].cell;
-
-                            if (rollerCargo[to.y][to.x].amount == 0 &&
-                                rollerCargo[from.y][from.x].amount > 0) {
-                                rollerCargo[to.y][to.x] =
-                                    rollerCargo[from.y][from.x];
-                                rollerCargo[from.y][from.x] = {};
-                                moved = true;
-                            }
-                        }
-
-                        if (loadRollerCargo(sourceEnd)) {
-                            moved = true;
-                        }
-                    }
-
-                    if (!moved) {
-                        program.status = "WAITING FOR MOVEMENT";
-                        continue;
-                    }
-
-                    program.energy--;
-                    program.completedActions++;
-                    program.commandTimer = 0.0f;
-
-                    if (program.completedActions >= instruction.argument) {
-                        program.cardIndex++;
-                        program.completedActions = 0;
-                        program.status =
-                            program.cardIndex >= (int)reader.cards.size()
-                            ? "Done" : "Next card";
-                    }
-                    continue;
-                }
-                if (program.energy == 0) {
-                    if (fuel.amount == 0) {
-                        program.status = "FUEL EXHAUSTED";
-                        continue;
-                    }
-                    fuel.amount--;
-                    if (fuel.amount == 0) {
-                        fuel = {};
-                    }
-                    program.energy = 20;
-                }
-                if (instruction.command == 2) {
-                    program.status = "Reading BACK";
-                    program.commandTimer += dt;
-
-                    if (program.commandTimer < 0.2f) {
-                        continue;
-                    }
-                    if (instruction.argument > program.cardIndex) {
-                        program.status = "INVALID BACK";
-                        continue;
-                    }
-
-                    program.cardIndex -= instruction.argument;
-                    program.completedActions = 0;
-                    program.commandTimer = 0.0f;
-                    continue;
-                }
-                if (configuringSlots) {
-                    const bool taking = instruction.command == TAKE_COMMAND;
-                    program.status = taking ? "Reading TAKE" : "Reading PUT";
-                    program.commandTimer += dt;
-
-                    if (program.commandTimer < 0.2f) {
-                        continue;
-                    }
-                    if (line.ends.empty()) {
-                        program.status = "NO LINE END";
-                        continue;
-                    }
-
-                    auto route = getControllerRoute(col, row);
-                    if (route.empty()) {
-                        program.status = "LINE BROKEN";
-                        continue;
-                    }
-
-                    const RollerEnd end = getRouteEnd(route, taking);
-                    const RollerCell building = NeighborCell(end.cell, end.side);
-                    const int slotCount = getBuildingSlotCount(building);
-                    if (slotCount == 0) {
-                        program.status = "NO BUILDING CONNECTED";
-                        continue;
-                    }
-
-                    const bool isChest = grid[building.y][building.x] == TileType::Chest;
-                    const bool automatic = instruction.argument == 0;
-                    if (instruction.argument > slotCount || (automatic && !isChest)) {
-                        program.status = "INVALID SLOT";
-                        continue;
-                    }
-
-                    RollerSlots& slots = getRollerEndSlots(end);
-                    const RollerEnd previous = program.numberedSlotEnd;
-                    const bool continuingSeries = isChest && !automatic &&
-                        program.numberedSlotCommand == instruction.command &&
-                        previous.cell.x == end.cell.x && previous.cell.y == end.cell.y &&
-                        previous.side == end.side;
-                    if (!continuingSeries) {
-                        slots = {};
-                    }
-                    if (automatic) {
-                        slots.automatic = true;
-                    }
-                    else {
-                        slots.numbered |= 1u << (instruction.argument - 1);
-                    }
-                    program.numberedSlotCommand = isChest && !automatic
-                        ? instruction.command : 0;
-                    program.numberedSlotEnd = end;
-
-                    program.commandTimer = 0.0f;
-                    program.cardIndex++;
-                    program.status =
-                        program.cardIndex >= (int)reader.cards.size()
-                        ? "Done" : "Next card";
-                    continue;
-                }
-                if (instruction.command != 3) {
-                    program.status = "UNSUPPORTED COMMAND";
-                    continue;
-                }
-                program.status = "Reading REVERSE";
-                program.commandTimer += dt;
-                if (program.commandTimer < 0.2f) {
-                    continue;
-                }
-                rollerEntrySides[row][col] = OtherRollerSide(
-                    rollerShapes[row][col], rollerEntrySides[row][col]
-                );
-                program.commandTimer = 0.0f;
-                program.cardIndex++;
-                program.status =
-                    program.cardIndex >= (int)reader.cards.size()
-                    ? "Done" : "Next card";
-            }
-        }
     };
 
     auto updateAllLocations = [&](float dt) {
@@ -2359,8 +1348,7 @@ int main() {
             x = 400;
             y = 200;
         }
-        
-        
+
         // ==========================================
         // CARGO DELIVERY — Доставка железа
         // ==========================================
@@ -2399,14 +1387,12 @@ int main() {
             puncherSlot = -1;
             openedFurnaceX = openedFurnaceY = -1;
             openedDrillX = openedDrillY = -1;
-            openedRollerX = openedRollerY = -1;
             openedChest = {-1, -1};
             selectedChestSlot = -1;
             selectedSlot = -1;
             splitSource = -1;
             previewSlot = -1;
             previewOffset = 0;
-            choosingControllerX = choosingControllerY = -1;
             dismantleX = dismantleY = -1;
             dismantleTimer = 0.0f;
             hitAnimationTimer = 0.0f;
@@ -2467,8 +1453,7 @@ int main() {
         }
 
         Rectangle wall = {500, 150, 100, 50};
-        
-        
+
         // Грузовая станция
         const bool hasCargoStation = currentLocation != Location::Woodland;
         Rectangle cargoStation = hasCargoStation ? Rectangle{680, 280, 60, 60} : Rectangle{-200, -200, 60, 60};
@@ -2480,7 +1465,6 @@ int main() {
             85.0f
         );
 
-        
         Vector2 mouse = GetMousePosition();
         int cellX = (int)mouse.x / TILE_SIZE;
         int cellY = (int)mouse.y / TILE_SIZE;
@@ -2496,20 +1480,13 @@ int main() {
         Rectangle craftButton = {615, 132, 170, 24};
         Rectangle cardButton = {615, 192, 170, 24};
         Rectangle drillButton = {615, 252, 170, 24};
-        Rectangle rollerButton = {615, 312, 170, 24};
-        Rectangle chestButton = {615, 341, 170, 25};
+        Rectangle chestButton = {615, 281, 170, 25};
         Rectangle punchButton = {185, 375, 170, 30};
-        Rectangle controllerButton = {25, 130, 150, 40};
-        Rectangle rollerFuelRect = {25, 215, 60, 60};
-        Rectangle rollerReaderRect = {25, 330, 150, 35};
         int punchedCardSlot = -1;
         bool validPattern = false;
         bool hasBlank = false;
         bool canPunch = false;
 
-        // Сохраняем блокировку до конца кадра отмены или выбора.
-        bool directionInputBlocked = choosingControllerX != -1;
-        bool directionSelectionStartedThisFrame = false;
         // Биржа доступна в мастерской. Модальное окно не пропускает
         // нажатия мыши и клавиш в игровую карту.
         bool registerToggled = false;
@@ -2519,7 +1496,7 @@ int main() {
         } else if (!registerOpen && !researchOpen && !shopOpen && !contractsOpen &&
                    technologies[3].unlocked && currentLocation == Location::Workshop &&
                    !worldMapOpen && !inventoryOpen && !puncherOpen && !developerPanelOpen &&
-                   !directionInputBlocked && !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
+                   !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
                    IsKeyPressed(KEY_K)) {
             closeLocationUI();
             registerOpen = true;
@@ -2558,7 +1535,7 @@ int main() {
         } else if (!researchOpen && !shopOpen && !contractsOpen && !registerOpen && !registerToggled &&
                    currentLocation == Location::Workshop && !worldMapOpen &&
                    !inventoryOpen && !puncherOpen && !developerPanelOpen &&
-                   !directionInputBlocked && !locationSelectedThisFrame &&
+                   !locationSelectedThisFrame &&
                    !IsKeyPressed(KEY_F1) && IsKeyPressed(KEY_L)) {
             closeLocationUI();
             researchOpen = true;
@@ -2578,7 +1555,7 @@ int main() {
             shopToggled = true;
         } else if (!shopOpen && !contractsOpen && !researchOpen && !researchToggled && !registerOpen && !registerToggled && currentLocation == Location::Workshop &&
                    !worldMapOpen && !inventoryOpen && !puncherOpen &&
-                   !developerPanelOpen && !directionInputBlocked &&
+                   !developerPanelOpen &&
                    !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
                    IsKeyPressed(KEY_S)) {
             closeLocationUI();
@@ -2599,7 +1576,7 @@ int main() {
             contractToggled = true;
         } else if (!contractsOpen && !shopOpen && !shopToggled && !researchOpen && !researchToggled && !registerOpen && !registerToggled && currentLocation == Location::Workshop &&
                    !worldMapOpen && !inventoryOpen && !puncherOpen &&
-                   !developerPanelOpen && !directionInputBlocked &&
+                   !developerPanelOpen &&
                    !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
                    IsKeyPressed(KEY_B)) {
             closeLocationUI();
@@ -2630,8 +1607,6 @@ int main() {
         if (panelToggled) {
             developerPanelOpen = !developerPanelOpen;
             if (developerPanelOpen) {
-                choosingControllerX = -1;
-                choosingControllerY = -1;
                 inventoryOpen = false;
                 puncherOpen = false;
                 puncherSlot = -1;
@@ -2639,8 +1614,6 @@ int main() {
                 openedFurnaceY = -1;
                 openedDrillX = -1;
                 openedDrillY = -1;
-                openedRollerX = -1;
-                openedRollerY = -1;
                 openedChest = {-1, -1};
                 selectedChestSlot = -1;
                 selectedSlot = -1;
@@ -2656,7 +1629,7 @@ int main() {
 
         if (developerPanelOpen && !panelToggled &&
             IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-            for (int i = 0; i < 9; i++) {
+            for (int i = 0; i < (int)(sizeof(developerItems) / sizeof(developerItems[0])); i++) {
                 if (!CheckCollisionPointRec(mouse, GetDeveloperButtonRect(i))) {
                     continue;
                 }
@@ -2675,12 +1648,11 @@ int main() {
             !worldMapOpen && !locationSelectedThisFrame &&
             !contractsOpen && !contractToggled && !shopOpen && !shopToggled &&
             !researchOpen && !researchToggled && !registerOpen && !registerToggled) {
-            
-            
+
             // ==========================================
             // CARGO — Ручная работа со складами рядом со станцией
             // ==========================================
-            if (nearCargoStation && !inventoryOpen && !directionInputBlocked) {
+            if (nearCargoStation && !inventoryOpen) {
                 auto loadStation = [&](ItemType type, int& stock, int capacity) {
                     int remaining = std::min(10, capacity - stock);
                     for (int i = 0; i < INVENTORY_SIZE && remaining > 0; ++i) {
@@ -2716,8 +1688,6 @@ int main() {
 
             bool furnacePlacedThisFrame = false;
             bool drillPlacedThisFrame = false;
-            bool rollerPlacedThisFrame = false;
-            bool rollerOpenedThisFrame = false;
             bool chestPlacedThisFrame = false;
             bool chestOpenedThisFrame = false;
 
@@ -2776,47 +1746,43 @@ int main() {
             // ==========================================
 
             // Клавиша 1 — стена
-            if (!directionInputBlocked && IsKeyPressed(KEY_ONE)) {
+            if (IsKeyPressed(KEY_ONE)) {
                 selectedTile = TileType::Wall;
                 placingFurnace = false;
                 placingDrill = false;
-                placingRoller = false;
+
                 placingChest = false;
             }
 
             // Клавиша 2 — шестерёнка
-            if (!directionInputBlocked && IsKeyPressed(KEY_TWO)) {
+            if (IsKeyPressed(KEY_TWO)) {
                 selectedTile = TileType::Gear;
                 placingFurnace = false;
                 placingDrill = false;
-                placingRoller = false;
+
                 placingChest = false;
             }
 
             // Клавиша 3 — генератор
-            if (!directionInputBlocked && IsKeyPressed(KEY_THREE)) {
+            if (IsKeyPressed(KEY_THREE)) {
                 selectedTile = TileType::Generator;
                 placingFurnace = false;
                 placingDrill = false;
-                placingRoller = false;
+
                 placingChest = false;
             }
 
-            if (!directionInputBlocked && IsKeyPressed(KEY_ZERO)) {
+            if (IsKeyPressed(KEY_ZERO)) {
                 selectedTile = TileType::Empty;
                 placingFurnace = false;
                 placingDrill = false;
-                placingRoller = false;
+
                 placingChest = false;
             }
 
             // ==========================================
             // BUILDING — Проверка возможности строительства
             // ==========================================
-
-            if (placingRoller && !inventoryOpen && !directionInputBlocked && IsKeyPressed(KEY_R)) {
-                selectedRollerShape = (selectedRollerShape + 1) % 6;
-            }
 
             // Проверяем всю площадь выбранной постройки.
             if (insideMap) {
@@ -2857,8 +1823,8 @@ int main() {
                 // ЛКМ — строим
                 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
                     canBuild &&
-                    !inventoryOpen && !directionInputBlocked &&
-                    !placingFurnace && !placingDrill && !placingRoller && !placingChest &&
+                    !inventoryOpen &&
+                    !placingFurnace && !placingDrill && !placingChest &&
                     selectedTile != TileType::Empty) {
 
                     grid[cellY][cellX] = selectedTile;
@@ -2866,7 +1832,7 @@ int main() {
 
                 // Установка печи из инвентаря
                 if (placingFurnace &&
-                    !inventoryOpen && !directionInputBlocked &&
+                    !inventoryOpen &&
                     canBuild &&
                     IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
 
@@ -2890,7 +1856,6 @@ int main() {
                             // Выходим из режима размещения
                             placingFurnace = false;
                             placingDrill = false;
-                            placingRoller = false;
 
                             break;
                         }
@@ -2899,7 +1864,7 @@ int main() {
 
                 // Установка изготовленного бура поверх залежи.
                 if (placingDrill &&
-                    !inventoryOpen && !directionInputBlocked &&
+                    !inventoryOpen &&
                     canBuild &&
                     IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                     for (int i = 0; i < INVENTORY_SIZE; i++) {
@@ -2914,13 +1879,13 @@ int main() {
                             inventory[i] = {};
                         }
                         placingDrill = false;
-                        placingRoller = false;
+
                         break;
                     }
                 }
 
                 if (placingChest &&
-                    !inventoryOpen && !directionInputBlocked &&
+                    !inventoryOpen &&
                     canBuild && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                     for (InventorySlot& slot : inventory) {
                         if (slot.type != ItemType::Chest || slot.amount == 0) {
@@ -2937,38 +1902,8 @@ int main() {
                     }
                 }
 
-                if (placingRoller &&
-                    !inventoryOpen && !directionInputBlocked &&
-                    canBuild &&
-                    IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                    for (int i = 0; i < INVENTORY_SIZE; i++) {
-                        if (inventory[i].type != ItemType::Roller ||
-                            inventory[i].amount == 0) {
-                            continue;
-                        }
-                        grid[cellY][cellX] = TileType::Roller;
-                        rollerShapes[cellY][cellX] = selectedRollerShape;
-                        rollerControllers[cellY][cellX] = false;
-                        rollerDirectionSet[cellY][cellX] = false;
-                        rollerPlacedThisFrame = true;
-                        rollerFuel[cellY][cellX] = {};
-                        rollerReaders[cellY][cellX] = {};
-                        rollerCargo[cellY][cellX] = {};
-                        rollerPrograms[cellY][cellX] = {};
-                        for (int side = 0; side < 4; side++) {
-                            rollerEndSlots[cellY][cellX][side] = {};
-                        }
-                        inventory[i].amount--;
-                        if (inventory[i].amount == 0) {
-                            inventory[i] = {};
-                        }
-                        placingRoller = false;
-                        break;
-                    }
-                }
-
                 // Пока ПКМ удаляет только тестовые постройки.
-                if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !inventoryOpen && !directionInputBlocked) {
+                if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !inventoryOpen) {
                     TileType tile = grid[cellY][cellX];
                     if (tile == TileType::Wall ||
                         tile == TileType::Gear ||
@@ -2993,10 +1928,9 @@ int main() {
             bool canDismantle = false;
 
             if (insideMap &&
-                !inventoryOpen && !directionInputBlocked &&
+                !inventoryOpen &&
                 IsMouseButtonDown(MOUSE_BUTTON_RIGHT) &&
-                (isLargeBuilding(grid[cellY][cellX]) ||
-                 grid[cellY][cellX] == TileType::Roller)) {
+                isLargeBuilding(grid[cellY][cellX])) {
 
                 Vector2 playerCenter = {
                     (float)x + 20,
@@ -3014,8 +1948,8 @@ int main() {
             }
 
             if (canDismantle) {
-                const RollerCell target = isLargeBuilding(grid[cellY][cellX])
-                    ? buildingOrigins[cellY][cellX] : RollerCell{cellX, cellY};
+                const CellPosition target = isLargeBuilding(grid[cellY][cellX])
+                    ? buildingOrigins[cellY][cellX] : CellPosition{cellX, cellY};
                 // При переходе на другую постройку начинаем заново.
                 if (dismantleX != target.x || dismantleY != target.y) {
                     dismantleX = target.x;
@@ -3028,58 +1962,7 @@ int main() {
                 if (dismantleTimer >= DISMANTLE_TIME) {
                     dismantleTimer = DISMANTLE_TIME;
 
-                    if (grid[cellY][cellX] == TileType::Roller) {
-                        InventorySlot candidate[INVENTORY_SIZE];
-                        for (int i = 0; i < INVENTORY_SIZE; i++) {
-                            candidate[i] = inventory[i];
-                        }
-                        int rollerLeft = addToInventory(
-                            candidate, INVENTORY_SIZE, ItemType::Roller, 1
-                        );
-                        int coalLeft = addToInventory(
-                            candidate, INVENTORY_SIZE, ItemType::Coal,
-                            rollerFuel[cellY][cellX].amount
-                        );
-                        int cargoLeft = addToInventory(
-                            candidate, INVENTORY_SIZE,
-                            rollerCargo[cellY][cellX].type,
-                            rollerCargo[cellY][cellX].amount
-                        );
-                        const InventorySlot& reader = rollerReaders[cellY][cellX];
-                        bool cardsFit = reader.amount == 0;
-                        if (!cardsFit) {
-                            for (int i = 0; i < INVENTORY_SIZE; i++) {
-                                if (candidate[i].amount == 0) {
-                                    candidate[i] = reader;
-                                    cardsFit = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (rollerLeft == 0 && coalLeft == 0 && cargoLeft == 0 && cardsFit) {
-                            for (int i = 0; i < INVENTORY_SIZE; i++) {
-                                inventory[i] = candidate[i];
-                            }
-                            rollerFuel[cellY][cellX] = {};
-                            rollerReaders[cellY][cellX] = {};
-                            rollerCargo[cellY][cellX] = {};
-                            rollerPrograms[cellY][cellX] = {};
-                            for (int side = 0; side < 4; side++) {
-                                rollerEndSlots[cellY][cellX][side] = {};
-                            }
-                            grid[cellY][cellX] = TileType::Empty;
-                            rollerShapes[cellY][cellX] = 0;
-                            rollerControllers[cellY][cellX] = false;
-                            rollerDirectionSet[cellY][cellX] = false;
-                            dismantleX = -1;
-                            dismantleY = -1;
-                            dismantleTimer = 0.0f;
-                        }
-                        else {
-                            inventoryFullTimer = 1.0f;
-                        }
-                    }
-                    else if (grid[cellY][cellX] == TileType::Chest) {
+                    if (grid[cellY][cellX] == TileType::Chest) {
                         ChestStorage& chest = chests[target.y][target.x];
                         InventorySlot candidate[INVENTORY_SIZE];
                         std::copy_n(inventory, INVENTORY_SIZE, candidate);
@@ -3234,9 +2117,9 @@ int main() {
             // ==========================================
 
             if (selectedTile == TileType::Empty &&
-                !placingFurnace && !placingDrill && !placingRoller && !placingChest &&
+                !placingFurnace && !placingDrill && !placingChest &&
                 insideMap &&
-                IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inventoryOpen && !directionInputBlocked && miningCooldown <= 0.0f) {
+                IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inventoryOpen && miningCooldown <= 0.0f) {
 
                 if (grid[cellY][cellX] == TileType::IronOre ||
                     grid[cellY][cellX] == TileType::Coal ||
@@ -3392,11 +2275,7 @@ int main() {
             }
 
             if (IsKeyPressed(KEY_E)) {
-                if (directionInputBlocked) {
-                    choosingControllerX = -1;
-                    choosingControllerY = -1;
-                }
-                else if (puncherOpen) {
+                if (puncherOpen) {
                     puncherOpen = false;
                     puncherSlot = -1;
                 }
@@ -3407,7 +2286,7 @@ int main() {
                     }
                 }
             }
-
+            
             if (puncherOpen && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                 for (int i = 0; i < 4; i++) {
                     if (CheckCollisionPointRec(mouse, GetPunchHoleRect(0, i))) {
@@ -3428,8 +2307,6 @@ int main() {
 
             validPattern =
                 ((command == 1 || command == 2) && argument > 0) ||
-                (command == 3 && argument == 0) ||
-                command == TAKE_COMMAND || command == PUT_COMMAND ||
                 (technologies[3].unlocked && IsArithmeticCommand(command) &&
                  (command != DIV_COMMAND || argument != 0));
 
@@ -3439,15 +2316,13 @@ int main() {
                 openedFurnaceY = -1;
                 openedDrillX = -1;
                 openedDrillY = -1;
-                openedRollerX = -1;
-                openedRollerY = -1;
                 openedChest = {-1, -1};
                 selectedChestSlot = -1;
             }
 
             // Открываем печь отдельным кликом.
-            if (!inventoryOpen && !directionInputBlocked &&
-                !placingFurnace && !placingDrill && !placingRoller && !placingChest &&
+            if (!inventoryOpen &&
+                !placingFurnace && !placingDrill && !placingChest &&
                 !furnacePlacedThisFrame &&
                 insideMap &&
                 IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
@@ -3466,7 +2341,7 @@ int main() {
                 if (CheckCollisionPointCircle(
                     furnaceCenter, playerCenter, 60.0f
                 )) {
-                    const RollerCell origin = buildingOrigins[cellY][cellX];
+                    const CellPosition origin = buildingOrigins[cellY][cellX];
                     openedFurnaceX = origin.x;
                     openedFurnaceY = origin.y;
                     inventoryOpen = true;
@@ -3474,8 +2349,8 @@ int main() {
             }
 
             // Открываем бур отдельным кликом в пределах досягаемости.
-            if (!inventoryOpen && !directionInputBlocked &&
-                !placingFurnace && !placingDrill && !placingRoller && !placingChest &&
+            if (!inventoryOpen &&
+                !placingFurnace && !placingDrill && !placingChest &&
                 !drillPlacedThisFrame &&
                 insideMap &&
                 IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
@@ -3494,58 +2369,15 @@ int main() {
                 if (CheckCollisionPointCircle(
                     drillCenter, playerCenter, 60.0f
                 )) {
-                    const RollerCell origin = buildingOrigins[cellY][cellX];
+                    const CellPosition origin = buildingOrigins[cellY][cellX];
                     openedDrillX = origin.x;
                     openedDrillY = origin.y;
                     inventoryOpen = true;
                 }
             }
 
-            // Обрабатываем кнопку до открытия окна, чтобы не нажать её
-            // тем же кликом, которым игрок открыл ролик.
-            if (inventoryOpen && !puncherOpen &&
-                openedRollerX != -1 && openedRollerY != -1 &&
-                IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-                CheckCollisionPointRec(mouse, controllerButton)) {
-                if (!rollerDirectionSet[openedRollerY][openedRollerX]) {
-                    rollerControllers[openedRollerY][openedRollerX] = true;
-                    choosingControllerX = openedRollerX;
-                    choosingControllerY = openedRollerY;
-                    directionInputBlocked = true;
-                    directionSelectionStartedThisFrame = true;
-                    inventoryOpen = false;
-                    selectedSlot = -1;
-                    splitSource = -1;
-                    openedRollerX = -1;
-                    openedRollerY = -1;
-                }
-            }
-
-            if (!inventoryOpen && !directionInputBlocked &&
-                !placingFurnace && !placingDrill && !placingRoller && !placingChest &&
-                !rollerPlacedThisFrame &&
-                insideMap &&
-                IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-                grid[cellY][cellX] == TileType::Roller) {
-                Vector2 playerCenter = {
-                    (float)x + 20,
-                    (float)y + 20
-                };
-                Vector2 rollerCenter = {
-                    (float)(cellX * TILE_SIZE + TILE_SIZE / 2),
-                    (float)(cellY * TILE_SIZE + TILE_SIZE / 2)
-                };
-                if (CheckCollisionPointCircle(
-                        rollerCenter, playerCenter, 60.0f)) {
-                    openedRollerX = cellX;
-                    openedRollerY = cellY;
-                    inventoryOpen = true;
-                    rollerOpenedThisFrame = true;
-                }
-            }
-
-            if (!inventoryOpen && !directionInputBlocked &&
-                !placingFurnace && !placingDrill && !placingRoller && !placingChest &&
+            if (!inventoryOpen &&
+                !placingFurnace && !placingDrill && !placingChest &&
                 !chestPlacedThisFrame && insideMap &&
                 IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
                 grid[cellY][cellX] == TileType::Chest) {
@@ -3580,7 +2412,7 @@ int main() {
                                 selectedSlot = -1;
                                 placingFurnace = false;
                                 placingDrill = false;
-                                placingRoller = false;
+
                                 placingChest = false;
                             }
                         }
@@ -3638,88 +2470,6 @@ int main() {
                 }
 
                 int selectedBeforeClick = selectedSlot;
-
-                if (openedRollerX != -1 && openedRollerY != -1 &&
-                    !rollerOpenedThisFrame &&
-                    rollerControllers[openedRollerY][openedRollerX] &&
-                    (leftPressed || rightPressed) &&
-                    CheckCollisionPointRec(mouse, rollerFuelRect)) {
-                    InventorySlot& fuel = rollerFuel[openedRollerY][openedRollerX];
-                    if (selectedBeforeClick != -1) {
-                        InventorySlot& source = inventory[selectedBeforeClick];
-                        if (source.type == ItemType::Coal) {
-                            int count = rightPressed ? 1 : source.amount;
-                            int space = GetMaxStack(ItemType::Coal) - fuel.amount;
-                            if (count > space) {
-                                count = space;
-                            }
-                            if (count > 0) {
-                                fuel.type = ItemType::Coal;
-                                fuel.amount += count;
-                                source.amount -= count;
-                                if (source.amount == 0) {
-                                    source = {};
-                                    selectedSlot = -1;
-                                }
-                            }
-                        }
-                    }
-                    else if (fuel.amount > 0) {
-                        int count = rightPressed ? 1 : fuel.amount;
-                        int remaining = addToInventory(
-                            inventory, INVENTORY_SIZE, ItemType::Coal, count
-                        );
-                        fuel.amount -= count - remaining;
-                        if (fuel.amount == 0) {
-                            fuel = {};
-                        }
-                        if (remaining > 0) {
-                            inventoryFullTimer = 1.0f;
-                        }
-                    }
-                }
-
-                if (openedRollerX != -1 && openedRollerY != -1 &&
-                    !rollerOpenedThisFrame &&
-                    rollerControllers[openedRollerY][openedRollerX] &&
-                    leftPressed &&
-                    CheckCollisionPointRec(mouse, rollerReaderRect)) {
-                    InventorySlot& reader =
-                        rollerReaders[openedRollerY][openedRollerX];
-                    if (selectedBeforeClick != -1) {
-                        InventorySlot& source = inventory[selectedBeforeClick];
-                        if (source.type == ItemType::PunchedCard &&
-                            reader.amount == 0) {
-                            reader = source;
-                            RollerProgram& program =
-                                rollerPrograms[openedRollerY][openedRollerX];
-                            program.completedActions = 0;
-                            program.cardIndex = 0;
-                            program.commandTimer = 0.0f;
-                            program.numberedSlotCommand = 0;
-                            program.status = "Insert card";
-                            source = {};
-                            selectedSlot = -1;
-                        }
-                    }
-                    else if (reader.amount > 0) {
-                        int freeSlot = -1;
-                        for (int i = 0; i < INVENTORY_SIZE; i++) {
-                            if (inventory[i].amount == 0) {
-                                freeSlot = i;
-                                break;
-                            }
-                        }
-                        if (freeSlot != -1) {
-                            inventory[freeSlot] = reader;
-                            reader = {};
-                            rollerPrograms[openedRollerY][openedRollerX].numberedSlotCommand = 0;
-                        }
-                        else {
-                            inventoryFullTimer = 1.0f;
-                        }
-                    }
-                }
 
                 if (openedDrillX != -1 && openedDrillY != -1 &&
                     (leftPressed || rightPressed)) {
@@ -3851,7 +2601,6 @@ int main() {
                             selectedSlot = i;
                             placingFurnace = inventory[i].type == ItemType::Furnace;
                             placingDrill = inventory[i].type == ItemType::Drill;
-                            placingRoller = inventory[i].type == ItemType::Roller;
                             placingChest = inventory[i].type == ItemType::Chest;
                             break;
                         }
@@ -3958,7 +2707,7 @@ int main() {
                             // Клик по исходному слоту отменяет выбор.
                             placingFurnace = false;
                             placingDrill = false;
-                            placingRoller = false;
+
                             placingChest = false;
                             selectedSlot = -1;
                             break;
@@ -4148,11 +2897,6 @@ int main() {
                     ingredients = {{ItemType::IronPlate, 3}};
                     order = {ItemType::Drill, 3.0f};
                 }
-                else if (CheckCollisionPointRec(mouse, rollerButton) &&
-                         plateCount >= 1 && woodCount >= 1) {
-                    ingredients = {{ItemType::IronPlate, 1}, {ItemType::Wood, 1}};
-                    order = {ItemType::Roller, 2.0f};
-                }
                 else if (CheckCollisionPointRec(mouse, chestButton) && woodCount >= 3) {
                     ingredients = {{ItemType::Wood, 3}};
                     order = {ItemType::Chest, 2.0f};
@@ -4236,34 +2980,6 @@ int main() {
                 puncherSlot = -1;
             }
 
-            if (choosingControllerX != -1 && choosingControllerY != -1 &&
-                !directionSelectionStartedThisFrame) {
-                auto choices = getDirectionChoices(
-                    choosingControllerX, choosingControllerY
-                );
-                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                    for (const RollerDirectionChoice& choice : choices) {
-                        if (!CheckCollisionPointRec(mouse, choice.hitbox)) {
-                            continue;
-                        }
-                        auto route = getDirectedLine(choice.start);
-                        for (const RollerStep& step : route) {
-                            if (step.cell.x != choosingControllerX ||
-                                step.cell.y != choosingControllerY) {
-                                continue;
-                            }
-                            int shape = rollerShapes[choosingControllerY][choosingControllerX];
-                            rollerEntrySides[choosingControllerY][choosingControllerX] =
-                                OtherRollerSide(shape, step.exitSide);
-                            rollerDirectionSet[choosingControllerY][choosingControllerX] = true;
-                            break;
-                        }
-                        choosingControllerX = -1;
-                        choosingControllerY = -1;
-                        break;
-                    }
-                }
-            }
         }
 
         // Карта мира не останавливает производство. F1 остаётся
@@ -4301,62 +3017,6 @@ int main() {
                 TileType tile = grid[row][col];
                 // Станция рисуется отдельно.
                 if (tile == TileType::CargoStation) {
-                    continue;
-                }
-                if (tile == TileType::Roller) {
-                    DrawRollerTile(
-                        col * TILE_SIZE, row * TILE_SIZE,
-                        rollerShapes[row][col], DARKGRAY
-                    );
-                    int tileX = col * TILE_SIZE;
-                    int tileY = row * TILE_SIZE;
-                    const InventorySlot& cargo = rollerCargo[row][col];
-                    if (cargo.amount > 0) {
-                        if (cargo.type == ItemType::IronPlate) {
-                            DrawRectangle(
-                                col * TILE_SIZE + 4,
-                                row * TILE_SIZE + 7,
-                                12, 6, LIGHTGRAY
-                            );
-                        }
-                        else {
-                            Color cargoColor = BROWN;
-                            if (cargo.type == ItemType::Coal) {
-                                cargoColor = BLACK;
-                            }
-                            else if (cargo.type == ItemType::Stone) {
-                                cargoColor = GRAY;
-                            }
-                            else if (cargo.type == ItemType::Wood) {
-                                cargoColor = DARKBROWN;
-                            }
-                            DrawCircle(
-                                col * TILE_SIZE + TILE_SIZE / 2,
-                                row * TILE_SIZE + TILE_SIZE / 2,
-                                5, cargoColor
-                            );
-                        }
-                    }
-
-                    if (isRollerConnected(col, row, RollerSide::Left)) {
-                        DrawRectangle(tileX + 1, tileY + 8, 3, 4, GREEN);
-                    }
-                    if (isRollerConnected(col, row, RollerSide::Right)) {
-                        DrawRectangle(tileX + TILE_SIZE - 4, tileY + 8, 3, 4, GREEN);
-                    }
-                    if (isRollerConnected(col, row, RollerSide::Up)) {
-                        DrawRectangle(tileX + 8, tileY + 1, 4, 3, GREEN);
-                    }
-                    if (isRollerConnected(col, row, RollerSide::Down)) {
-                        DrawRectangle(tileX + 8, tileY + TILE_SIZE - 4, 4, 3, GREEN);
-                    }
-                    if (rollerControllers[row][col]) {
-                        DrawRectangleLines(
-                            tileX + 1, tileY + 1,
-                            TILE_SIZE - 2, TILE_SIZE - 2,
-                            GOLD
-                        );
-                    }
                     continue;
                 }
 
@@ -4461,98 +3121,6 @@ int main() {
             DrawLine(0, y, 800, y, LIGHTGRAY);
         }
 
-        if (!inventoryOpen && !directionInputBlocked && !developerPanelOpen &&
-            insideMap &&
-            grid[cellY][cellX] == TileType::Roller &&
-            rollerControllers[cellY][cellX]) {
-            RollerLine line = getRollerLine(cellX, cellY);
-
-            for (const RollerCell& cell : line.cells) {
-                DrawRectangle(
-                    cell.x * TILE_SIZE + 2,
-                    cell.y * TILE_SIZE + 2,
-                    TILE_SIZE - 4,
-                    TILE_SIZE - 4,
-                    Fade(SKYBLUE, 0.35f)
-                );
-            }
-
-            for (const RollerEnd& end : line.ends) {
-                int edgeX = end.cell.x * TILE_SIZE + TILE_SIZE / 2;
-                int edgeY = end.cell.y * TILE_SIZE + TILE_SIZE / 2;
-
-                switch (end.side) {
-                    case RollerSide::Left:
-                        edgeX = end.cell.x * TILE_SIZE + 2;
-                        break;
-                    case RollerSide::Right:
-                        edgeX = (end.cell.x + 1) * TILE_SIZE - 3;
-                        break;
-                    case RollerSide::Up:
-                        edgeY = end.cell.y * TILE_SIZE + 2;
-                        break;
-                    case RollerSide::Down:
-                        edgeY = (end.cell.y + 1) * TILE_SIZE - 3;
-                        break;
-                }
-
-                DrawCircle(edgeX, edgeY, 3, ORANGE);
-                const RollerSlots& slots = getRollerEndSlots(end);
-                std::string label;
-                if (slots.automatic) {
-                    label = "AUTO";
-                }
-                else {
-                    for (int slot = 1; slot <= CHEST_SIZE; slot++) {
-                        if (slots.includes(slot)) {
-                            if (!label.empty()) {
-                                label += ',';
-                            }
-                            label += (char)('0' + slot);
-                        }
-                    }
-                }
-                if (!label.empty()) {
-                    const int labelX = end.side == RollerSide::Left
-                        ? edgeX - MeasureText(label.c_str(), 14) - 5 : edgeX + 5;
-                    const int labelY = end.side == RollerSide::Down ? edgeY + 4 : edgeY - 14;
-                    DrawText(label.c_str(), labelX, labelY, 14, DARKBLUE);
-                }
-            }
-
-            DrawText(
-                TextFormat(
-                    "Line: %i rollers | %i ends",
-                    (int)line.cells.size(),
-                    (int)line.ends.size()
-                ),
-                10, 90, 18, DARKBLUE
-            );
-        }
-
-        for (int row = 0; row < ROWS; row++) {
-            for (int col = 0; col < COLS; col++) {
-                if (grid[row][col] != TileType::Roller ||
-                    !rollerControllers[row][col] ||
-                    !rollerDirectionSet[row][col]) {
-                    continue;
-                }
-                RollerLine line = getRollerLine(col, row);
-                int controllerCount = 0;
-                for (const RollerCell& cell : line.cells) {
-                    if (rollerControllers[cell.y][cell.x]) {
-                        controllerCount++;
-                    }
-                }
-                if (controllerCount != 1) {
-                    continue;
-                }
-                for (const RollerStep& step : getControllerRoute(col, row)) {
-                    DrawRollerArrow(step.cell, step.exitSide, TILE_SIZE);
-                }
-            }
-        }
-
         if (dismantleX != -1 && dismantleTimer > 0.0f) {
             int barX = dismantleX * TILE_SIZE;
             int barY = dismantleY * TILE_SIZE - 8;
@@ -4581,8 +3149,7 @@ int main() {
             DrawText("B - CONTRACTS | S - SHOP | L - RESEARCH", 10, 105, 16, DARKBLUE);
             if (technologies[3].unlocked) DrawText("K - MECHANICAL REGISTER", 10, 125, 16, DARKBLUE);
         }
-        
-        
+
         // Склад активной территории и краткий статус перевозок.
         if (!worldMapOpen && hasCargoStation) {
             DrawRectangle(540, 40, 250, 100, DARKGRAY);
@@ -4621,8 +3188,7 @@ int main() {
             TextFormat("Iron: %i", ironCount),
             10, 35, 20, DARKBROWN
         );
-        
-        
+
         // ==========================================
         // CARGO STATION — Отрисовка
         // ==========================================
@@ -4669,57 +3235,48 @@ int main() {
         // RENDER — Предпросмотр строительства
         // ==========================================
 
-        if (!developerPanelOpen && insideMap && !inventoryOpen && !directionInputBlocked &&
-            (placingFurnace || placingDrill || placingRoller || placingChest ||
+        if (!developerPanelOpen && insideMap && !inventoryOpen &&
+                (placingFurnace || placingDrill || placingChest ||
              selectedTile != TileType::Empty)) {
 
-            if (placingRoller) {
-                DrawRollerTile(
-                    cellX * TILE_SIZE, cellY * TILE_SIZE,
-                    selectedRollerShape,
-                    canBuild ? GREEN : RED
-                );
+            Color previewColor = GRAY;
+
+            if (placingFurnace) {
+                previewColor = MAROON;
             }
-            else {
-                Color previewColor = GRAY;
-
-                if (placingFurnace) {
-                    previewColor = MAROON;
-                }
-                else if (placingDrill) {
-                    previewColor = PURPLE;
-                }
-                else if (placingChest) {
-                    previewColor = DARKBROWN;
-                }
-                else if (selectedTile == TileType::Gear) {
-                    previewColor = ORANGE;
-                }
-                else if (selectedTile == TileType::Generator) {
-                    previewColor = GREEN;
-                }
-
-                // Запрет строительства обозначаем красным ДО рисования.
-                if (!canBuild) {
-                    previewColor = RED;
-                }
-
-                const int size = (placingFurnace || placingDrill || placingChest)
-                    ? LARGE_BUILDING_SIZE * TILE_SIZE : TILE_SIZE;
-                DrawRectangle(
-                    cellX * TILE_SIZE,
-                    cellY * TILE_SIZE,
-                    size, size,
-                    Fade(previewColor, 0.4f)
-                );
-
-                DrawRectangleLines(
-                    cellX * TILE_SIZE,
-                    cellY * TILE_SIZE,
-                    size, size,
-                    previewColor
-                );
+            else if (placingDrill) {
+                previewColor = PURPLE;
             }
+            else if (placingChest) {
+                previewColor = DARKBROWN;
+            }
+            else if (selectedTile == TileType::Gear) {
+                previewColor = ORANGE;
+            }
+            else if (selectedTile == TileType::Generator) {
+                previewColor = GREEN;
+            }
+
+            // Запрет строительства обозначаем красным ДО рисования.
+            if (!canBuild) {
+                previewColor = RED;
+            }
+
+            const int size = (placingFurnace || placingDrill || placingChest)
+                ? LARGE_BUILDING_SIZE * TILE_SIZE : TILE_SIZE;
+            DrawRectangle(
+                cellX * TILE_SIZE,
+                cellY * TILE_SIZE,
+                size, size,
+                Fade(previewColor, 0.4f)
+            );
+
+            DrawRectangleLines(
+                cellX * TILE_SIZE,
+                cellY * TILE_SIZE,
+                size, size,
+                previewColor
+            );
         }
 
         // ==========================================
@@ -4751,9 +3308,6 @@ int main() {
         else if (placingDrill) {
             selectedName = "Drill";
         }
-        else if (placingRoller) {
-            selectedName = "Roller (R)";
-        }
         else if (placingChest) {
             selectedName = "Chest";
         }
@@ -4784,87 +3338,6 @@ int main() {
                     if (selectedChestSlot != i) {
                         drawStoredStack(chest.slots[i], (int)slot.x, (int)slot.y);
                     }
-                }
-                DrawText("E: Close", 25, 380, 18, LIGHTGRAY);
-            }
-
-            if (openedRollerX != -1 && openedRollerY != -1) {
-                bool isController =
-                    rollerControllers[openedRollerY][openedRollerX];
-                DrawRectangle(10, 60, 180, 350, DARKGRAY);
-                DrawText("Roller", 25, 75, 24, WHITE);
-                if (isController) {
-                    DrawText("Controller", 25, 110, 20, GOLD);
-                    if (rollerDirectionSet[openedRollerY][openedRollerX]) {
-                        const RollerProgram& program =
-                            rollerPrograms[openedRollerY][openedRollerX];
-                        const InventorySlot& reader =
-                            rollerReaders[openedRollerY][openedRollerX];
-                        DrawText(program.status, 25, 135, 14, WHITE);
-                        DrawText(
-                            TextFormat("Energy: %i", program.energy),
-                            25, 153, 14, GOLD
-                        );
-                        if (reader.amount > 0 &&
-                            program.cardIndex < (int)reader.cards.size() &&
-                            reader.cards[program.cardIndex].command == 1) {
-                            DrawText(
-                                TextFormat(
-                                    "Steps: %i/%i",
-                                    program.completedActions,
-                                    reader.cards[program.cardIndex].argument
-                                ),
-                                100, 153, 14, LIGHTGRAY
-                            );
-                        }
-                        if (reader.amount > 0) {
-                            int total = (int)reader.cards.size();
-                            int shownCard = program.cardIndex + 1;
-                            if (shownCard > total) {
-                                shownCard = total;
-                            }
-                            DrawText(
-                                TextFormat("Card: %i/%i", shownCard, total),
-                                25, 171, 14, LIGHTGRAY
-                            );
-                        }
-                    }
-                    const InventorySlot& fuel =
-                        rollerFuel[openedRollerY][openedRollerX];
-                    DrawText("1. Coal", 25, 190, 18, WHITE);
-                    DrawRectangleRec(rollerFuelRect, GRAY);
-                    DrawRectangleLinesEx(rollerFuelRect, 1, WHITE);
-                    if (fuel.amount > 0) {
-                        DrawRectangle(42, 232, 26, 26, BLACK);
-                    }
-                    DrawText(
-                        TextFormat("%i / 200", fuel.amount),
-                        25, 285, 18, WHITE
-                    );
-                    const InventorySlot& reader =
-                        rollerReaders[openedRollerY][openedRollerX];
-                    DrawText("Reader", 25, 308, 18, WHITE);
-                    DrawRectangleRec(rollerReaderRect, GRAY);
-                    DrawRectangleLinesEx(rollerReaderRect, 1, GOLD);
-                    if (reader.amount == 0) {
-                        DrawText("Insert card", 35, 339, 18, LIGHTGRAY);
-                    }
-                    else {
-                        DrawText(
-                            TextFormat("Cards: %i", (int)reader.cards.size()),
-                            35, 339, 18, GOLD
-                        );
-                    }
-                }
-                else {
-                    DrawText("Regular roller", 25, 110, 16, LIGHTGRAY);
-                }
-                if (!rollerDirectionSet[openedRollerY][openedRollerX]) {
-                    DrawRectangleRec(controllerButton, GREEN);
-                    DrawText(
-                        isController ? "Set direction" : "Set controller",
-                        32, 142, 18, WHITE
-                    );
                 }
                 DrawText("E: Close", 25, 380, 18, LIGHTGRAY);
             }
@@ -5099,17 +3572,8 @@ int main() {
             DrawRectangleRec(drillButton, plateCount >= 3 ? GREEN : GRAY);
             DrawText("Craft Drill", 625, 256, 16, WHITE);
 
-            bool canCraftRoller = plateCount >= 1 && woodCount >= 1;
-            DrawText("Roller", 620, 276, 18, WHITE);
-            DrawText(
-                TextFormat("Plate %i/1 Wood %i/1", plateCount, woodCount),
-                620, 295, 14, canCraftRoller ? GREEN : RED
-            );
-            DrawRectangleRec(rollerButton, canCraftRoller ? GREEN : GRAY);
-            DrawText("Craft Roller", 625, 316, 16, WHITE);
-
             DrawRectangleRec(chestButton, woodCount >= 3 ? GREEN : GRAY);
-            DrawText(TextFormat("Chest  Wood %i/3", woodCount), 623, 346, 14, WHITE);
+            DrawText(TextFormat("Chest  Wood %i/3", woodCount), 623, 286, 14, WHITE);
 
             if (!craftQueue.empty()) {
                 const char* craftingName = "Furnace";
@@ -5118,9 +3582,6 @@ int main() {
                 }
                 else if (craftQueue.front().result == ItemType::Drill) {
                     craftingName = "Drill";
-                }
-                else if (craftQueue.front().result == ItemType::Roller) {
-                    craftingName = "Roller";
                 }
                 else if (craftQueue.front().result == ItemType::Chest) {
                     craftingName = "Wooden Chest";
@@ -5182,8 +3643,7 @@ int main() {
                     drawStoredStack(inventory[i], slotX, slotY);
                 }
             }
-            
-            
+
             if (splitSource != -1) {
 
                 // Получаем предмет из выбранного слота
@@ -5218,9 +3678,6 @@ int main() {
                         36, 14, Fade(LIGHTGRAY, 0.7f)
                     );
                 }
-                else if (item.type == ItemType::Roller) {
-                    DrawRollerItem((int)mouse.x - 18, (int)mouse.y - 11);
-                }
                 else if (item.type == ItemType::Chest) {
                     DrawChestItem((int)mouse.x - 17, (int)mouse.y - 12);
                 }
@@ -5246,8 +3703,7 @@ int main() {
                     WHITE
                 );
             }
-            
-            
+
             // Предмет, который мы перетаскиваем
             const InventorySlot* carriedItem = selectedSlot != -1
                 ? &inventory[selectedSlot] : nullptr;
@@ -5286,9 +3742,6 @@ int main() {
                         (int)mouse.x - 18, (int)mouse.y - 11,
                         item.cards.front().command, item.cards.front().argument
                     );
-                }
-                else if (item.type == ItemType::Roller) {
-                    DrawRollerItem((int)mouse.x - 18, (int)mouse.y - 11);
                 }
                 else if (item.type == ItemType::Chest) {
                     DrawChestItem((int)mouse.x - 17, (int)mouse.y - 12);
@@ -5410,9 +3863,6 @@ int main() {
                     else if (inventory[i].type == ItemType::Drill) {
                         itemName = "Drill";
                     }
-                    else if (inventory[i].type == ItemType::Roller) {
-                        itemName = "Roller";
-                    }
                     else if (inventory[i].type == ItemType::Chest) {
                         itemName = "Wooden Chest";
                     }
@@ -5520,7 +3970,6 @@ int main() {
             DrawRectangle(160, 35, 480, 405, DARKGRAY);
             DrawText("Card Puncher", 185, 50, 24, WHITE);
             DrawText("RUN 0001   BACK 0010", 185, 85, 18, LIGHTGRAY);
-            DrawText("REVERSE 0011   TAKE 0100   PUT 0101", 185, 110, 18, LIGHTGRAY);
             if (technologies[3].unlocked) {
                 DrawText("SET 0110  ADD 0111  SUB 1000  MUL 1001  DIV 1010", 185, 135, 14, SKYBLUE);
             }
@@ -5550,7 +3999,7 @@ int main() {
             if (!hasBlank) {
                 error = "NO BLANK CARD";
             }
-            else if (command < 1 || command > DIV_COMMAND) {
+            else if (command != 1 && command != 2 && !IsArithmeticCommand(command)) {
                 error = "UNKNOWN COMMAND";
             }
             else if (IsArithmeticCommand(command) && !technologies[3].unlocked) {
@@ -5558,9 +4007,6 @@ int main() {
             }
             else if (command == DIV_COMMAND && argument == 0) {
                 error = "DIVISION BY ZERO";
-            }
-            else if (command == 3 && argument != 0) {
-                error = "REVERSE NEEDS NO ARGUMENT";
             }
             else if ((command == 1 || command == 2) && argument == 0) {
                 error = "ARGUMENT REQUIRED";
@@ -5575,19 +4021,6 @@ int main() {
             DrawText("E: Close", 185, 415, 18, LIGHTGRAY);
         }
 
-        if (!developerPanelOpen && choosingControllerX != -1) {
-            auto choices = getDirectionChoices(
-                choosingControllerX, choosingControllerY
-            );
-            for (const RollerDirectionChoice& choice : choices) {
-                DrawRectangleLinesEx(choice.hitbox, 2, ORANGE);
-            }
-            DrawText(
-                "Choose direction: click a marker | E: Cancel",
-                10, 90, 18, DARKBLUE
-            );
-        }
-
         if (developerPanelOpen) {
             DrawRectangle(
                 0, 0, GetScreenWidth(), GetScreenHeight(),
@@ -5598,7 +4031,7 @@ int main() {
             DrawText("Developer Panel", 145, 70, 26, WHITE);
             DrawText("PAUSED | F1: Close", 145, 102, 16, GOLD);
 
-            for (int i = 0; i < 9; i++) {
+            for (int i = 0; i < (int)(sizeof(developerItems) / sizeof(developerItems[0])); i++) {
                 Rectangle button = GetDeveloperButtonRect(i);
                 bool hovered = CheckCollisionPointRec(mouse, button);
                 DrawRectangleRec(button, hovered ? GRAY : DARKBLUE);
