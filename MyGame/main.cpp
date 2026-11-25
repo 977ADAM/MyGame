@@ -105,11 +105,7 @@ int main() {
 
     int x = 400;
     int y = 200;
-    int coinX = 600;
-    int coinY = 300;
-    bool coinCollected = false;
     int speed = 7;
-    int score = 0;
     bool inventoryOpen = false;
     
     // Игровые локации
@@ -232,9 +228,6 @@ int main() {
     
     enum class TileType {
         Empty,
-        Wall,
-        Gear,
-        Generator,
         IronOre,
         Coal,
         Drill,
@@ -855,8 +848,7 @@ int main() {
     // BUILDING — Выбранный тип объекта
     // ==========================================
 
-    // Объект, который игрок собирается разместить
-    TileType selectedTile = TileType::Wall;
+    // Режим размещения постройки из инвентаря.
     bool placingFurnace = false;
     bool placingDrill = false;
     bool placingChest = false;
@@ -1118,8 +1110,6 @@ int main() {
             }
         }
 
-        Rectangle wall = {500, 150, 100, 50};
-
         // Грузовая станция
         const bool hasCargoStation = currentLocation != Location::Woodland;
         Rectangle cargoStation = hasCargoStation ? Rectangle{680, 280, 60, 60} : Rectangle{-200, -200, 60, 60};
@@ -1316,8 +1306,7 @@ int main() {
 
             Rectangle player = {(float)x, (float)y, 40, 40};
 
-            if (CheckCollisionRecs(player, wall) ||
-                CheckCollisionRecs(player, cargoStation)) {
+            if (CheckCollisionRecs(player, cargoStation)) {
                 x = oldX;
             }
 
@@ -1342,53 +1331,14 @@ int main() {
 
             player = {(float)x, (float)y, 40, 40};
 
-            if (CheckCollisionRecs(player, wall) ||
-                CheckCollisionRecs(player, cargoStation)) {
+            if (CheckCollisionRecs(player, cargoStation)) {
                 y = oldY;
             }
 
             player = {(float)x, (float)y, 40, 40};
 
-            if (!coinCollected) {
-                if (CheckCollisionCircleRec({(float)coinX, (float)coinY}, 15, player)) {
-                    coinCollected = true;
-                    score += 1;
-                }
-            }
-
-            // ==========================================
-            // INPUT — Переключение объектов
-            // ==========================================
-
-            // Клавиша 1 — стена
-            if (IsKeyPressed(KEY_ONE)) {
-                selectedTile = TileType::Wall;
-                placingFurnace = false;
-                placingDrill = false;
-
-                placingChest = false;
-            }
-
-            // Клавиша 2 — шестерёнка
-            if (IsKeyPressed(KEY_TWO)) {
-                selectedTile = TileType::Gear;
-                placingFurnace = false;
-                placingDrill = false;
-
-                placingChest = false;
-            }
-
-            // Клавиша 3 — генератор
-            if (IsKeyPressed(KEY_THREE)) {
-                selectedTile = TileType::Generator;
-                placingFurnace = false;
-                placingDrill = false;
-
-                placingChest = false;
-            }
-
+            // Клавиша 0 — отмена размещения, возврат к добыче.
             if (IsKeyPressed(KEY_ZERO)) {
-                selectedTile = TileType::Empty;
                 placingFurnace = false;
                 placingDrill = false;
 
@@ -1400,9 +1350,8 @@ int main() {
             // ==========================================
 
             // Проверяем всю площадь выбранной постройки.
-            if (insideMap) {
-                const int buildSize = (placingFurnace || placingDrill || placingChest)
-                    ? LARGE_BUILDING_SIZE : 1;
+            if (insideMap && (placingFurnace || placingDrill || placingChest)) {
+                const int buildSize = LARGE_BUILDING_SIZE;
                 const float buildPixels = (float)(buildSize * TILE_SIZE);
                 Rectangle cell = {
                     (float)(cellX * TILE_SIZE),
@@ -1431,20 +1380,9 @@ int main() {
                 
                 canBuild = areaAvailable && (!placingDrill || hasDeposit) &&
                     !CheckCollisionRecs(cell, player) &&
-                    !CheckCollisionRecs(cell, wall) &&
                     !CheckCollisionRecs(cell, cargoStation) &&
                     !(currentLocation != Location::Workshop && placingFurnace);
                 
-                // ЛКМ — строим
-                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-                    canBuild &&
-                    !inventoryOpen &&
-                    !placingFurnace && !placingDrill && !placingChest &&
-                    selectedTile != TileType::Empty) {
-
-                    grid[cellY][cellX] = selectedTile;
-                }
-
                 // Установка печи из инвентаря
                 if (placingFurnace &&
                     !inventoryOpen &&
@@ -1514,16 +1452,6 @@ int main() {
                         }
                         placingChest = false;
                         break;
-                    }
-                }
-
-                // Пока ПКМ удаляет только тестовые постройки.
-                if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !inventoryOpen) {
-                    TileType tile = grid[cellY][cellX];
-                    if (tile == TileType::Wall ||
-                        tile == TileType::Gear ||
-                        tile == TileType::Generator) {
-                        grid[cellY][cellX] = TileType::Empty;
                     }
                 }
             }
@@ -1699,8 +1627,7 @@ int main() {
             // MINING — Добыча рукой
             // ==========================================
 
-            if (selectedTile == TileType::Empty &&
-                !placingFurnace && !placingDrill && !placingChest &&
+            if (!placingFurnace && !placingDrill && !placingChest &&
                 insideMap &&
                 IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inventoryOpen && miningCooldown <= 0.0f) {
 
@@ -2393,16 +2320,7 @@ int main() {
 
                 Color color;
 
-                if (tile == TileType::Wall) {
-                    color = GRAY;
-                }
-                else if (tile == TileType::Generator) {
-                    color = GREEN;
-                }
-                else if (tile == TileType::Gear) {
-                    color = ORANGE;
-                }
-                else if (tile == TileType::Drill) {
+                if (tile == TileType::Drill) {
                     color = PURPLE;
                 }
                 else if (tile == TileType::IronOre) {
@@ -2508,15 +2426,14 @@ int main() {
             );
         }
         
-        DrawText(TextFormat("Score: %i", score), 10, 10, 20, BLACK);
-        DrawText(TextFormat("Money: GBP %lld", money), 10, 60, 18, DARKGREEN);
-        DrawText(TextFormat("XP: %lld", experiencePoints), 10, 82, 18, DARKBLUE);
+        DrawText(TextFormat("Money: GBP %lld", money), 10, 35, 18, DARKGREEN);
+        DrawText(TextFormat("XP: %lld", experiencePoints), 10, 57, 18, DARKBLUE);
         if (currentLocation == Location::Workshop) {
-            DrawText("B - CONTRACTS | S - SHOP | L - RESEARCH", 10, 105, 16, DARKBLUE);
+            DrawText("B - CONTRACTS | S - SHOP | L - RESEARCH", 10, 80, 16, DARKBLUE);
         }
         if (!worldMapOpen && !inventoryOpen) {
             DrawText(productionActive() ? "F2 - PRODUCTION ON" : "F2 - PRODUCTION OFF",
-                     10, 125, 16, productionActive() ? DARKGREEN : DARKBLUE);
+                     10, 100, 16, productionActive() ? DARKGREEN : DARKBLUE);
         }
 
         // Склад активной территории и краткий статус перевозок.
@@ -2555,7 +2472,7 @@ int main() {
 
         DrawText(
             TextFormat("Iron: %i", ironCount),
-            10, 35, 20, DARKBROWN
+            10, 10, 20, DARKBROWN
         );
 
         // ==========================================
@@ -2595,18 +2512,12 @@ int main() {
             );
         }
         
-        DrawRectangleRec(wall, RED);
-        if (!coinCollected) {
-            DrawCircle(coinX, coinY, 15, GOLD);
-        }
-        
         // ==========================================
         // RENDER — Предпросмотр строительства
         // ==========================================
 
         if (!developerPanelOpen && insideMap && !inventoryOpen &&
-                (placingFurnace || placingDrill || placingChest ||
-             selectedTile != TileType::Empty)) {
+            (placingFurnace || placingDrill || placingChest)) {
 
             Color previewColor = GRAY;
 
@@ -2619,20 +2530,13 @@ int main() {
             else if (placingChest) {
                 previewColor = DARKBROWN;
             }
-            else if (selectedTile == TileType::Gear) {
-                previewColor = ORANGE;
-            }
-            else if (selectedTile == TileType::Generator) {
-                previewColor = GREEN;
-            }
 
             // Запрет строительства обозначаем красным ДО рисования.
             if (!canBuild) {
                 previewColor = RED;
             }
 
-            const int size = (placingFurnace || placingDrill || placingChest)
-                ? LARGE_BUILDING_SIZE * TILE_SIZE : TILE_SIZE;
+            const int size = LARGE_BUILDING_SIZE * TILE_SIZE;
             DrawRectangle(
                 cellX * TILE_SIZE,
                 cellY * TILE_SIZE,
@@ -2653,23 +2557,7 @@ int main() {
         // ==========================================
 
         // Название выбранного объекта
-        const char* selectedName = "Unknown";
-
-        if (selectedTile == TileType::Wall) {
-            selectedName = "Wall";
-        }
-        else if (selectedTile == TileType::Gear) {
-            selectedName = "Gear";
-        }
-        else if (selectedTile == TileType::Generator) {
-            selectedName = "Generator";
-        }
-        else if (selectedTile == TileType::Drill) {
-            selectedName = "Drill";
-        }
-        else if (selectedTile == TileType::Empty) {
-            selectedName = "Mining";
-        }
+        const char* selectedName = "Mining";
 
         if (placingFurnace) {
             selectedName = "Furnace";
