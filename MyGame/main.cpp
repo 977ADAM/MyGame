@@ -300,6 +300,8 @@ Rectangle GetDeveloperButtonRect(int index) {
 
 int main() {
     InitWindow(800, 450, "My Game");
+    // ESC возвращает с карты мира, а не закрывает игру.
+    SetExitKey(KEY_NULL);
 
     int x = 400;
     int y = 200;
@@ -335,6 +337,49 @@ int main() {
     // Вместимость склада мастерской
     const int WORKSHOP_CARGO_CAPACITY = 200;
 
+    // ==========================================
+    // CARGO DELIVERY — Груз в пути и автоматические рейсы
+    // ==========================================
+    const int CARGO_BATCH_SIZE = 10;
+    const float CARGO_TRAVEL_TIME = 5.0f;
+    int cargoInTransit = 0;
+    float cargoTravelRemaining = 0.0f;
+    bool autoCargoDelivery = false;
+
+    // Отправляем только один груз за раз. Место на складе назначения
+    // резервируется размером груза; другой рейс до прибытия невозможен.
+    auto dispatchCargo = [&](bool fullBatchOnly) {
+        if (cargoInTransit > 0) return false;
+
+        const int freeSpace = WORKSHOP_CARGO_CAPACITY - workshopCargoIron;
+        const int amount = std::min(CARGO_BATCH_SIZE,
+            std::min(mineCargoIron, freeSpace));
+        if (amount <= 0 || (fullBatchOnly && amount < CARGO_BATCH_SIZE)) {
+            return false;
+        }
+
+        mineCargoIron -= amount;
+        cargoInTransit = amount;
+        cargoTravelRemaining = CARGO_TRAVEL_TIME;
+        return true;
+    };
+
+    // Таймер работает независимо от открытой локации или карты мира.
+    auto updateCargoDelivery = [&](float dt) {
+        if (cargoInTransit <= 0) return;
+
+        cargoTravelRemaining = std::max(0.0f, cargoTravelRemaining - dt);
+        if (cargoTravelRemaining > 0.0f) return;
+
+        // Защита от переполнения даже при будущих новых источниках руды.
+        const int freeSpace = std::max(0,
+            WORKSHOP_CARGO_CAPACITY - workshopCargoIron);
+        const int delivered = std::min(cargoInTransit, freeSpace);
+        workshopCargoIron += delivered;
+        cargoInTransit -= delivered;
+        // Если места не хватило, остаток ждёт разгрузки в пути.
+    };
+
     SetTargetFPS(60);
     
     const int TILE_SIZE = 20;
@@ -353,7 +398,8 @@ int main() {
         Tree,
         Furnace,
         Roller,
-        Chest
+        Chest,
+        CargoStation
     };
     
     struct CardInstruction {
@@ -508,14 +554,21 @@ int main() {
     std::queue<CraftOrder> craftQueue;
     float craftTimer = 0.0f;
     
-    TileType grid[ROWS][COLS] = {};
+    static TileType workshopGrid[ROWS][COLS] = {};
+    auto* grid = workshopGrid;
     const int LARGE_BUILDING_SIZE = 2;
-    RollerCell buildingOrigins[ROWS][COLS] = {};
-    int rollerShapes[ROWS][COLS] = {};
-    bool rollerControllers[ROWS][COLS] = {};
-    InventorySlot rollerFuel[ROWS][COLS] = {};
-    InventorySlot rollerReaders[ROWS][COLS] = {};
-    InventorySlot rollerCargo[ROWS][COLS] = {};
+    static RollerCell workshopBuildingOrigins[ROWS][COLS] = {};
+    auto* buildingOrigins = workshopBuildingOrigins;
+    static int workshopRollerShapes[ROWS][COLS] = {};
+    auto* rollerShapes = workshopRollerShapes;
+    static bool workshopRollerControllers[ROWS][COLS] = {};
+    auto* rollerControllers = workshopRollerControllers;
+    static InventorySlot workshopRollerFuel[ROWS][COLS] = {};
+    auto* rollerFuel = workshopRollerFuel;
+    static InventorySlot workshopRollerReaders[ROWS][COLS] = {};
+    auto* rollerReaders = workshopRollerReaders;
+    static InventorySlot workshopRollerCargo[ROWS][COLS] = {};
+    auto* rollerCargo = workshopRollerCargo;
     struct RollerProgram {
         int energy = 0;
         int completedActions = 0;
@@ -527,9 +580,12 @@ int main() {
         int numberedSlotCommand = 0;
         RollerEnd numberedSlotEnd = {};
     };
-    RollerProgram rollerPrograms[ROWS][COLS] = {};
-    bool rollerDirectionSet[ROWS][COLS] = {};
-    RollerSide rollerEntrySides[ROWS][COLS] = {};
+    static RollerProgram workshopRollerPrograms[ROWS][COLS] = {};
+    auto* rollerPrograms = workshopRollerPrograms;
+    static bool workshopRollerDirectionSet[ROWS][COLS] = {};
+    auto* rollerDirectionSet = workshopRollerDirectionSet;
+    static RollerSide workshopRollerEntrySides[ROWS][COLS] = {};
+    auto* rollerEntrySides = workshopRollerEntrySides;
     struct RollerSlots {
         unsigned int numbered = 0;
         bool automatic = false;
@@ -542,7 +598,8 @@ int main() {
             return automatic || (numbered & (1u << (slot - 1))) != 0;
         }
     };
-    RollerSlots rollerEndSlots[ROWS][COLS][4] = {};
+    static RollerSlots workshopRollerEndSlots[ROWS][COLS][4] = {};
+    auto* rollerEndSlots = workshopRollerEndSlots;
     auto getRollerEndSlots = [&](RollerEnd end) -> RollerSlots& {
         return rollerEndSlots[end.cell.y][end.cell.x][static_cast<int>(end.side)];
     };
@@ -752,9 +809,12 @@ int main() {
         };
     };
 
-    TileType drillDeposits[ROWS][COLS] = {};
-    int durability[ROWS][COLS] = {};
-    int resourceAmount[ROWS][COLS] = {};
+    static TileType workshopDrillDeposits[ROWS][COLS] = {};
+    auto* drillDeposits = workshopDrillDeposits;
+    static int workshopDurability[ROWS][COLS] = {};
+    auto* durability = workshopDurability;
+    static int workshopResourceAmount[ROWS][COLS] = {};
+    auto* resourceAmount = workshopResourceAmount;
     
     // Отдельная карта железной шахты
     static TileType ironMineGrid[ROWS][COLS] = {};
@@ -838,7 +898,8 @@ int main() {
         const char* status = "Insert card";
     };
 
-    FurnaceStorage furnaces[ROWS][COLS] = {};
+    static FurnaceStorage workshopFurnaces[ROWS][COLS] = {};
+    auto* furnaces = workshopFurnaces;
 
     struct DrillStorage {
         InventorySlot fuel = {};
@@ -852,13 +913,15 @@ int main() {
         const char* status = "Insert card";
     };
 
-    DrillStorage drills[ROWS][COLS] = {};
+    static DrillStorage workshopDrills[ROWS][COLS] = {};
+    auto* drills = workshopDrills;
 
     const int CHEST_SIZE = 5;
     struct ChestStorage {
         InventorySlot slots[CHEST_SIZE] = {};
     };
-    ChestStorage chests[ROWS][COLS] = {};
+    static ChestStorage workshopChests[ROWS][COLS] = {};
+    auto* chests = workshopChests;
     
     
     // ==========================================
@@ -907,6 +970,9 @@ int main() {
         }
         if (grid[cell.y][cell.x] == TileType::Chest) {
             return CHEST_SIZE;
+        }
+        if (grid[cell.y][cell.x] == TileType::CargoStation) {
+            return 1;
         }
 
         return 0;
@@ -1009,6 +1075,19 @@ int main() {
             return false;
         }
 
+        // Станция шахты принимает железную руду через слот 1.
+        if (grid[building.y][building.x] == TileType::CargoStation) {
+            if (currentLocation != Location::IronMine ||
+                !slots.includes(1) ||
+                cargo.type != ItemType::IronOre ||
+                mineCargoIron >= MINE_CARGO_CAPACITY) {
+                return false;
+            }
+            mineCargoIron++;
+            cargo = {};
+            return true;
+        }
+
         const bool isChest = grid[building.y][building.x] == TileType::Chest;
         InventorySlot* target = nullptr;
         for (int slot = 1; slot <= slotCount; slot++) {
@@ -1047,6 +1126,21 @@ int main() {
         const RollerSlots& slots = getRollerEndSlots(end);
         const RollerCell building = NeighborCell(end.cell, end.side);
         const int slotCount = getBuildingSlotCount(building);
+
+        // Станция мастерской выдаёт железную руду через слот 1.
+        if (slotCount > 0 &&
+            grid[building.y][building.x] == TileType::CargoStation) {
+            if (currentLocation != Location::Workshop ||
+                !slots.includes(1) ||
+                workshopCargoIron <= 0) {
+                return false;
+            }
+            cargo.type = ItemType::IronOre;
+            cargo.amount = 1;
+            workshopCargoIron--;
+            return true;
+        }
+
         for (int slot = 1; slot <= slotCount; slot++) {
             if (!slots.includes(slot)) {
                 continue;
@@ -1123,6 +1217,14 @@ int main() {
         return moved;
     };
     
+    // CARGO STATION — клетки станции в обеих локациях
+    for (int row = 14; row < 17; row++) {
+        for (int col = 34; col < 37; col++) {
+            grid[row][col] = TileType::CargoStation;
+            ironMineGrid[row][col] = TileType::CargoStation;
+        }
+    }
+
     grid[10][15] = TileType::IronOre;
     grid[10][16] = TileType::IronOre;
     grid[11][15] = TileType::IronOre;
@@ -1205,7 +1307,7 @@ int main() {
     
     
     // ==========================================
-    // LOCATION — Переключение игровых территорий
+    // LOCATION — Выбор активных массивов без копирования
     // ==========================================
 
     auto switchLocation = [&](Location destination) {
@@ -1216,37 +1318,540 @@ int main() {
             return;
         }
 
+        const bool inMine = destination == Location::IronMine;
+
         // Карта и ресурсы
-        std::swap(grid, ironMineGrid);
-        std::swap(durability, ironMineDurability);
-        std::swap(resourceAmount, ironMineResourceAmount);
+        grid = inMine ? ironMineGrid : workshopGrid;
+        durability = inMine ? ironMineDurability : workshopDurability;
+        resourceAmount = inMine ? ironMineResourceAmount : workshopResourceAmount;
 
         // Крупные постройки
-        std::swap(buildingOrigins, ironMineBuildingOrigins);
+        buildingOrigins = inMine ? ironMineBuildingOrigins : workshopBuildingOrigins;
 
         // Роликовые линии
-        std::swap(rollerShapes, ironMineRollerShapes);
-        std::swap(rollerControllers, ironMineRollerControllers);
-        std::swap(rollerFuel, ironMineRollerFuel);
-        std::swap(rollerReaders, ironMineRollerReaders);
-        std::swap(rollerCargo, ironMineRollerCargo);
-        std::swap(rollerPrograms, ironMineRollerPrograms);
-        std::swap(rollerDirectionSet, ironMineRollerDirectionSet);
-        std::swap(rollerEntrySides, ironMineRollerEntrySides);
-        std::swap(rollerEndSlots, ironMineRollerEndSlots);
+        rollerShapes = inMine ? ironMineRollerShapes : workshopRollerShapes;
+        rollerControllers = inMine ? ironMineRollerControllers : workshopRollerControllers;
+        rollerFuel = inMine ? ironMineRollerFuel : workshopRollerFuel;
+        rollerReaders = inMine ? ironMineRollerReaders : workshopRollerReaders;
+        rollerCargo = inMine ? ironMineRollerCargo : workshopRollerCargo;
+        rollerPrograms = inMine ? ironMineRollerPrograms : workshopRollerPrograms;
+        rollerDirectionSet = inMine ? ironMineRollerDirectionSet : workshopRollerDirectionSet;
+        rollerEntrySides = inMine ? ironMineRollerEntrySides : workshopRollerEntrySides;
+        rollerEndSlots = inMine ? ironMineRollerEndSlots : workshopRollerEndSlots;
 
         // Месторождения под бурами
-        std::swap(drillDeposits, ironMineDrillDeposits);
+        drillDeposits = inMine ? ironMineDrillDeposits : workshopDrillDeposits;
 
         // Производственные механизмы
-        std::swap(drills, ironMineDrills);
-        std::swap(furnaces, ironMineFurnaces);
-        std::swap(chests, ironMineChests);
+        drills = inMine ? ironMineDrills : workshopDrills;
+        furnaces = inMine ? ironMineFurnaces : workshopFurnaces;
+        chests = inMine ? ironMineChests : workshopChests;
 
         // Запоминаем выбранную локацию
         currentLocation = destination;
     };
 
+
+    // ==========================================
+    // SIMULATION — Производство независимо от игрока
+    // ==========================================
+    // Обновляет только механизмы выбранной территории, без ввода и UI.
+    auto updateMachines = [&](float dt) {
+        // Плавка по установленной карте RUN.
+        for (int row = 0; row < ROWS; row++) {
+            for (int col = 0; col < COLS; col++) {
+                if (grid[row][col] != TileType::Furnace ||
+                    !isBuildingOrigin(col, row)) {
+                    continue;
+                }
+                FurnaceStorage& furnace = furnaces[row][col];
+                if (furnace.reader.amount == 0) {
+                    furnace.status = "Insert card";
+                    continue;
+                }
+                if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
+                    furnace.status = "Done";
+                    continue;
+                }
+
+                const CardInstruction& instruction =
+                    furnace.reader.cards[furnace.cardIndex];
+
+                if (instruction.command == 1 &&
+                    furnace.output.amount >= GetMaxStack(ItemType::IronPlate)) {
+                    furnace.status = "OUTPUT FULL";
+                    continue;
+                }
+
+                bool continuingSmelt = instruction.command == 1 && furnace.smelting;
+                if (!continuingSmelt && furnace.energy == 0) {
+                    if (furnace.fuel.amount == 0) {
+                        furnace.status = "FUEL EXHAUSTED";
+                        continue;
+                    }
+                    furnace.fuel.amount--;
+                    if (furnace.fuel.amount == 0) {
+                        furnace.fuel = {};
+                    }
+                    furnace.energy = 3;
+                }
+
+                if (instruction.command == 2) {
+                    furnace.status = "Reading BACK";
+                    furnace.commandTimer += dt;
+                    if (furnace.commandTimer < 0.2f) {
+                        continue;
+                    }
+                    if (instruction.argument > furnace.cardIndex) {
+                        furnace.status = "INVALID BACK";
+                        continue;
+                    }
+                    furnace.cardIndex -= instruction.argument;
+                    furnace.completedActions = 0;
+                    furnace.commandTimer = 0.0f;
+                    continue;
+                }
+
+                if (instruction.command != 1) {
+                    furnace.status = "UNSUPPORTED COMMAND";
+                    continue;
+                }
+
+                if (!furnace.smelting) {
+                    if (furnace.ore.amount == 0) {
+                        furnace.status = "NO ORE";
+                        continue;
+                    }
+                    furnace.ore.amount--;
+                    if (furnace.ore.amount == 0) {
+                        furnace.ore = {};
+                    }
+                    furnace.energy--;
+                    furnace.smelting = true;
+                    furnace.smeltTimer = 3.0f;
+                }
+
+                furnace.status = "Smelting";
+                furnace.smeltTimer -= dt;
+                if (furnace.smeltTimer <= 0.0f) {
+                    furnace.output.type = ItemType::IronPlate;
+                    furnace.output.amount++;
+                    furnace.smelting = false;
+                    furnace.smeltTimer = 0.0f;
+                    furnace.completedActions++;
+                    if (furnace.completedActions >= instruction.argument) {
+                        furnace.cardIndex++;
+                        furnace.commandTimer = 0.0f;
+                        if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
+                            furnace.status = "Done";
+                        }
+                        else {
+                            furnace.completedActions = 0;
+                            furnace.status = "Next card";
+                        }
+                    }
+                }
+            }
+        }
+
+        // Добыча по установленной карте RUN.
+        for (int row = 0; row < ROWS; row++) {
+            for (int col = 0; col < COLS; col++) {
+                if (grid[row][col] != TileType::Drill ||
+                    !isBuildingOrigin(col, row)) {
+                    continue;
+                }
+
+                DrillStorage& drill = drills[row][col];
+
+                if (drill.reader.amount == 0) {
+                    drill.status = "Insert card";
+                    continue;
+                }
+
+                if (drill.cardIndex >= (int)drill.reader.cards.size()) {
+                    drill.status = "Done";
+                    continue;
+                }
+
+                const CardInstruction& instruction =
+                    drill.reader.cards[drill.cardIndex];
+
+                RollerCell deposit = {-1, -1};
+                ItemType resource = ItemType::Empty;
+                if (instruction.command == 1) {
+                    deposit = findDrillDeposit({col, row});
+                    if (deposit.x == -1) {
+                        drill.status = "DEPOSIT DEPLETED";
+                        continue;
+                    }
+                    resource = getDepositItem(drillDeposits[deposit.y][deposit.x]);
+                    if (drill.output.amount > 0 && drill.output.type != resource) {
+                        drill.status = resource == ItemType::IronOre
+                            ? "Clear output. Next resource: iron ore"
+                            : "Clear output. Next resource: coal";
+                        continue;
+                    }
+                    if (drill.output.amount >= GetMaxStack(resource)) {
+                        drill.status = "OUTPUT FULL";
+                        continue;
+                    }
+                }
+
+                if (drill.energy == 0) {
+                    if (drill.fuel.amount == 0) {
+                        drill.status = "FUEL EXHAUSTED";
+                        continue;
+                    }
+
+                    drill.fuel.amount--;
+                    if (drill.fuel.amount == 0) {
+                        drill.fuel = {};
+                    }
+                    drill.energy = 3;
+                }
+
+                if (instruction.command == 2) {
+                    drill.status = "Reading BACK";
+                    drill.commandTimer += dt;
+
+                    if (drill.commandTimer < 0.2f) {
+                        continue;
+                    }
+
+                    if (instruction.argument > drill.cardIndex) {
+                        drill.status = "INVALID BACK";
+                        continue;
+                    }
+
+                    drill.cardIndex -= instruction.argument;
+                    drill.completedActions = 0;
+                    drill.commandTimer = 0.0f;
+                    continue;
+                }
+
+                if (instruction.command != 1) {
+                    drill.status = "UNSUPPORTED COMMAND";
+                    continue;
+                }
+
+                drill.status = "Mining";
+                drill.hitTimer += dt;
+
+                if (drill.hitTimer < 0.4f) {
+                    continue;
+                }
+
+                drill.hitTimer = 0.0f;
+                drill.energy--;
+                drill.completedActions++;
+                int& hitsLeft = durability[deposit.y][deposit.x];
+                int& remaining = resourceAmount[deposit.y][deposit.x];
+                hitsLeft--;
+
+                if (hitsLeft <= 0) {
+                    drill.output.type = resource;
+                    drill.output.amount++;
+                    remaining--;
+
+                    if (remaining > 0) {
+                        hitsLeft = resource == ItemType::IronOre ? 3 : 2;
+                    }
+                }
+
+                if (drill.completedActions >= instruction.argument) {
+                    drill.cardIndex++;
+                    drill.commandTimer = 0.0f;
+
+                    if (drill.cardIndex >= (int)drill.reader.cards.size()) {
+                        drill.status = "Done";
+                    }
+                    else {
+                        drill.completedActions = 0;
+                        drill.status = "Next card";
+                    }
+                }
+            }
+        }
+
+        // Исполнение программы роликовой линии.
+        for (int row = 0; row < ROWS; row++) {
+            for (int col = 0; col < COLS; col++) {
+                if (grid[row][col] != TileType::Roller ||
+                    !rollerControllers[row][col]) {
+                    continue;
+                }
+                RollerProgram& program = rollerPrograms[row][col];
+                const InventorySlot& reader = rollerReaders[row][col];
+                InventorySlot& fuel = rollerFuel[row][col];
+                if (!rollerDirectionSet[row][col]) {
+                    program.status = "Set direction";
+                    continue;
+                }
+                RollerLine line = getRollerLine(col, row);
+                int controllerCount = 0;
+                for (const RollerCell& cell : line.cells) {
+                    if (rollerControllers[cell.y][cell.x]) {
+                        controllerCount++;
+                    }
+                }
+                if (program.lineCells.empty()) {
+                    program.lineCells = line.cells;
+                }
+
+                bool missingCell = false;
+                for (const RollerCell& expected : program.lineCells) {
+                    if (!HasRollerCell(line.cells, expected)) {
+                        missingCell = true;
+                        break;
+                    }
+                }
+
+                if (missingCell) {
+                    program.lineBroken = true;
+                }
+
+                if (program.lineBroken) {
+                    if (missingCell) {
+                        program.status = "LINE BROKEN";
+                        continue;
+                    }
+
+                    program.lineBroken = false;
+                    program.lineCells = line.cells;
+                }
+
+                if (controllerCount == 1) {
+                    program.lineCells = line.cells;
+                }
+
+                if (controllerCount > 1) {
+                    program.status = "CONFLICT";
+                    continue;
+                }
+                if (reader.amount == 0) {
+                    program.status = "Insert card";
+                    continue;
+                }
+                if (program.cardIndex >= (int)reader.cards.size()) {
+                    program.numberedSlotCommand = 0;
+                    program.status = "Done";
+                    continue;
+                }
+                const CardInstruction& instruction =
+                    reader.cards[program.cardIndex];
+                const bool configuringSlots = instruction.command == TAKE_COMMAND ||
+                    instruction.command == PUT_COMMAND;
+                if (!configuringSlots) {
+                    program.numberedSlotCommand = 0;
+                }
+
+                if (instruction.command == 1) {
+                    bool isLoop = line.ends.empty();
+
+                    auto route = getControllerRoute(col, row);
+                    if (route.empty()) {
+                        program.status = "LINE BROKEN";
+                        continue;
+                    }
+
+                    RollerEnd sourceEnd = {};
+                    RollerEnd targetEnd = {};
+
+                    if (!isLoop) {
+                        sourceEnd = getRouteEnd(route, true);
+                        targetEnd = getRouteEnd(route, false);
+                        const char* connectionError = getRollerEndError(sourceEnd);
+                        if (connectionError == nullptr) {
+                            connectionError = getRollerEndError(targetEnd);
+                        }
+                        if (connectionError != nullptr) {
+                            program.status = connectionError;
+                            continue;
+                        }
+                    }
+
+                    if (program.energy == 0) {
+                        if (fuel.amount == 0) {
+                            program.status = "FUEL EXHAUSTED";
+                            continue;
+                        }
+                        fuel.amount--;
+                        if (fuel.amount == 0) {
+                            fuel = {};
+                        }
+                        program.energy = 20;
+                    }
+
+                    program.status = "Running";
+                    program.commandTimer += dt;
+                    if (program.commandTimer < 0.5f) {
+                        continue;
+                    }
+
+                    bool moved = isLoop && moveLoopCargo(route);
+
+                    if (!isLoop) {
+                        if (unloadRollerCargo(targetEnd)) {
+                            moved = true;
+                        }
+
+                        for (int i = (int)route.size() - 1; i > 0; i--) {
+                            RollerCell from = route[i - 1].cell;
+                            RollerCell to = route[i].cell;
+
+                            if (rollerCargo[to.y][to.x].amount == 0 &&
+                                rollerCargo[from.y][from.x].amount > 0) {
+                                rollerCargo[to.y][to.x] =
+                                    rollerCargo[from.y][from.x];
+                                rollerCargo[from.y][from.x] = {};
+                                moved = true;
+                            }
+                        }
+
+                        if (loadRollerCargo(sourceEnd)) {
+                            moved = true;
+                        }
+                    }
+
+                    if (!moved) {
+                        program.status = "WAITING FOR MOVEMENT";
+                        continue;
+                    }
+
+                    program.energy--;
+                    program.completedActions++;
+                    program.commandTimer = 0.0f;
+
+                    if (program.completedActions >= instruction.argument) {
+                        program.cardIndex++;
+                        program.completedActions = 0;
+                        program.status =
+                            program.cardIndex >= (int)reader.cards.size()
+                            ? "Done" : "Next card";
+                    }
+                    continue;
+                }
+                if (program.energy == 0) {
+                    if (fuel.amount == 0) {
+                        program.status = "FUEL EXHAUSTED";
+                        continue;
+                    }
+                    fuel.amount--;
+                    if (fuel.amount == 0) {
+                        fuel = {};
+                    }
+                    program.energy = 20;
+                }
+                if (instruction.command == 2) {
+                    program.status = "Reading BACK";
+                    program.commandTimer += dt;
+
+                    if (program.commandTimer < 0.2f) {
+                        continue;
+                    }
+                    if (instruction.argument > program.cardIndex) {
+                        program.status = "INVALID BACK";
+                        continue;
+                    }
+
+                    program.cardIndex -= instruction.argument;
+                    program.completedActions = 0;
+                    program.commandTimer = 0.0f;
+                    continue;
+                }
+                if (configuringSlots) {
+                    const bool taking = instruction.command == TAKE_COMMAND;
+                    program.status = taking ? "Reading TAKE" : "Reading PUT";
+                    program.commandTimer += dt;
+
+                    if (program.commandTimer < 0.2f) {
+                        continue;
+                    }
+                    if (line.ends.empty()) {
+                        program.status = "NO LINE END";
+                        continue;
+                    }
+
+                    auto route = getControllerRoute(col, row);
+                    if (route.empty()) {
+                        program.status = "LINE BROKEN";
+                        continue;
+                    }
+
+                    const RollerEnd end = getRouteEnd(route, taking);
+                    const RollerCell building = NeighborCell(end.cell, end.side);
+                    const int slotCount = getBuildingSlotCount(building);
+                    if (slotCount == 0) {
+                        program.status = "NO BUILDING CONNECTED";
+                        continue;
+                    }
+
+                    const bool isChest = grid[building.y][building.x] == TileType::Chest;
+                    const bool automatic = instruction.argument == 0;
+                    if (instruction.argument > slotCount || (automatic && !isChest)) {
+                        program.status = "INVALID SLOT";
+                        continue;
+                    }
+
+                    RollerSlots& slots = getRollerEndSlots(end);
+                    const RollerEnd previous = program.numberedSlotEnd;
+                    const bool continuingSeries = isChest && !automatic &&
+                        program.numberedSlotCommand == instruction.command &&
+                        previous.cell.x == end.cell.x && previous.cell.y == end.cell.y &&
+                        previous.side == end.side;
+                    if (!continuingSeries) {
+                        slots = {};
+                    }
+                    if (automatic) {
+                        slots.automatic = true;
+                    }
+                    else {
+                        slots.numbered |= 1u << (instruction.argument - 1);
+                    }
+                    program.numberedSlotCommand = isChest && !automatic
+                        ? instruction.command : 0;
+                    program.numberedSlotEnd = end;
+
+                    program.commandTimer = 0.0f;
+                    program.cardIndex++;
+                    program.status =
+                        program.cardIndex >= (int)reader.cards.size()
+                        ? "Done" : "Next card";
+                    continue;
+                }
+                if (instruction.command != 3) {
+                    program.status = "UNSUPPORTED COMMAND";
+                    continue;
+                }
+                program.status = "Reading REVERSE";
+                program.commandTimer += dt;
+                if (program.commandTimer < 0.2f) {
+                    continue;
+                }
+                rollerEntrySides[row][col] = OtherRollerSide(
+                    rollerShapes[row][col], rollerEntrySides[row][col]
+                );
+                program.commandTimer = 0.0f;
+                program.cardIndex++;
+                program.status =
+                    program.cardIndex >= (int)reader.cards.size()
+                    ? "Done" : "Next card";
+            }
+        }
+    };
+
+    auto updateAllLocations = [&](float dt) {
+        const Location playerLocation = currentLocation;
+        updateMachines(dt);
+        // Временно выбираем данные второй территории. Указатели
+        // переключаются за O(1); массивы и прогресс не копируются.
+        switchLocation(playerLocation == Location::Workshop
+            ? Location::IronMine : Location::Workshop);
+        updateMachines(dt);
+        // До отрисовки и ввода возвращаем контекст игрока.
+        switchLocation(playerLocation);
+    };
 
     while (!WindowShouldClose()) {
         
@@ -1265,23 +1870,43 @@ int main() {
         // CARGO DELIVERY — Доставка железа
         // ==========================================
 
-        // Отправка руды через карту мира
-        if (worldMapOpen && IsKeyPressed(KEY_T)) {
+        // Доставка продолжается при нахождении в любой локации.
+        updateCargoDelivery(GetFrameTime());
 
-            int freeSpace =
-                WORKSHOP_CARGO_CAPACITY - workshopCargoIron;
-
-            int amount = std::min(
-                10,
-                std::min(mineCargoIron, freeSpace)
-            );
-
-            if (amount > 0) {
-                mineCargoIron -= amount;
-                workshopCargoIron += amount;
-            }
+        if (worldMapOpen && IsKeyPressed(KEY_A)) {
+            autoCargoDelivery = !autoCargoDelivery;
         }
-        
+
+        if (worldMapOpen && IsKeyPressed(KEY_T)) {
+            dispatchCargo(false);
+        }
+
+        // Автоматический рейс только при наличии полной партии и места.
+        if (autoCargoDelivery) {
+            dispatchCargo(true);
+        }
+
+        // При смене территории сбрасываем только интерфейс игрока.
+        // Сами механизмы и их программы остаются на своих местах.
+        auto closeLocationUI = [&]() {
+            inventoryOpen = false;
+            puncherOpen = false;
+            puncherSlot = -1;
+            openedFurnaceX = openedFurnaceY = -1;
+            openedDrillX = openedDrillY = -1;
+            openedRollerX = openedRollerY = -1;
+            openedChest = {-1, -1};
+            selectedChestSlot = -1;
+            selectedSlot = -1;
+            splitSource = -1;
+            previewSlot = -1;
+            previewOffset = 0;
+            choosingControllerX = choosingControllerY = -1;
+            dismantleX = dismantleY = -1;
+            dismantleTimer = 0.0f;
+            hitAnimationTimer = 0.0f;
+        };
+
         // Выбор локации на карте мира
         bool locationSelectedThisFrame = false;
 
@@ -1294,6 +1919,7 @@ int main() {
 
             if (CheckCollisionPointRec(mapMouse, workshopButton)) {
 
+                closeLocationUI();
                 switchLocation(Location::Workshop);
                 worldMapOpen = false;
 
@@ -1304,6 +1930,7 @@ int main() {
             }
             else if (CheckCollisionPointRec(mapMouse, mineButton)) {
 
+                closeLocationUI();
                 switchLocation(Location::IronMine);
                 worldMapOpen = false;
 
@@ -1315,6 +1942,19 @@ int main() {
         }
 
         Rectangle wall = {500, 150, 100, 50};
+        
+        
+        // Грузовая станция
+        Rectangle cargoStation = {680, 280, 60, 60};
+
+        // Проверяем, находится ли игрок рядом
+        bool nearCargoStation = CheckCollisionPointCircle(
+            {(float)x + 20, (float)y + 20},
+            {710, 310},
+            85.0f
+        );
+
+        
         Vector2 mouse = GetMousePosition();
         int cellX = (int)mouse.x / TILE_SIZE;
         int cellY = (int)mouse.y / TILE_SIZE;
@@ -1398,6 +2038,7 @@ int main() {
             // ==========================================
 
             if (currentLocation == Location::IronMine &&
+                nearCargoStation &&
                 IsKeyPressed(KEY_T)) {
 
                 for (int i = 0; i < INVENTORY_SIZE; i++) {
@@ -1436,6 +2077,7 @@ int main() {
             // ==========================================
 
             if (currentLocation == Location::Workshop &&
+                nearCargoStation &&
                 IsKeyPressed(KEY_T) &&
                 !inventoryOpen) {
 
@@ -1480,7 +2122,8 @@ int main() {
 
             Rectangle player = {(float)x, (float)y, 40, 40};
 
-            if (CheckCollisionRecs(player, wall)) {
+            if (CheckCollisionRecs(player, wall) ||
+                CheckCollisionRecs(player, cargoStation)) {
                 x = oldX;
             }
 
@@ -1505,7 +2148,8 @@ int main() {
 
             player = {(float)x, (float)y, 40, 40};
 
-            if (CheckCollisionRecs(player, wall)) {
+            if (CheckCollisionRecs(player, wall) ||
+                CheckCollisionRecs(player, cargoStation)) {
                 y = oldY;
             }
 
@@ -1598,6 +2242,7 @@ int main() {
                 canBuild = areaAvailable && (!placingDrill || hasDeposit) &&
                     !CheckCollisionRecs(cell, player) &&
                     !CheckCollisionRecs(cell, wall) &&
+                    !CheckCollisionRecs(cell, cargoStation) &&
                     !(currentLocation == Location::IronMine && placingFurnace);
                 
                 // ЛКМ — строим
@@ -2990,489 +3635,6 @@ int main() {
                 puncherSlot = -1;
             }
 
-            // Плавка по установленной карте RUN.
-            for (int row = 0; row < ROWS; row++) {
-                for (int col = 0; col < COLS; col++) {
-                    if (grid[row][col] != TileType::Furnace ||
-                        !isBuildingOrigin(col, row)) {
-                        continue;
-                    }
-                    FurnaceStorage& furnace = furnaces[row][col];
-                    if (furnace.reader.amount == 0) {
-                        furnace.status = "Insert card";
-                        continue;
-                    }
-                    if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
-                        furnace.status = "Done";
-                        continue;
-                    }
-
-                    const CardInstruction& instruction =
-                        furnace.reader.cards[furnace.cardIndex];
-
-                    if (instruction.command == 1 &&
-                        furnace.output.amount >= GetMaxStack(ItemType::IronPlate)) {
-                        furnace.status = "OUTPUT FULL";
-                        continue;
-                    }
-
-                    bool continuingSmelt = instruction.command == 1 && furnace.smelting;
-                    if (!continuingSmelt && furnace.energy == 0) {
-                        if (furnace.fuel.amount == 0) {
-                            furnace.status = "FUEL EXHAUSTED";
-                            continue;
-                        }
-                        furnace.fuel.amount--;
-                        if (furnace.fuel.amount == 0) {
-                            furnace.fuel = {};
-                        }
-                        furnace.energy = 3;
-                    }
-
-                    if (instruction.command == 2) {
-                        furnace.status = "Reading BACK";
-                        furnace.commandTimer += GetFrameTime();
-                        if (furnace.commandTimer < 0.2f) {
-                            continue;
-                        }
-                        if (instruction.argument > furnace.cardIndex) {
-                            furnace.status = "INVALID BACK";
-                            continue;
-                        }
-                        furnace.cardIndex -= instruction.argument;
-                        furnace.completedActions = 0;
-                        furnace.commandTimer = 0.0f;
-                        continue;
-                    }
-
-                    if (instruction.command != 1) {
-                        furnace.status = "UNSUPPORTED COMMAND";
-                        continue;
-                    }
-
-                    if (!furnace.smelting) {
-                        if (furnace.ore.amount == 0) {
-                            furnace.status = "NO ORE";
-                            continue;
-                        }
-                        furnace.ore.amount--;
-                        if (furnace.ore.amount == 0) {
-                            furnace.ore = {};
-                        }
-                        furnace.energy--;
-                        furnace.smelting = true;
-                        furnace.smeltTimer = 3.0f;
-                    }
-
-                    furnace.status = "Smelting";
-                    furnace.smeltTimer -= GetFrameTime();
-                    if (furnace.smeltTimer <= 0.0f) {
-                        furnace.output.type = ItemType::IronPlate;
-                        furnace.output.amount++;
-                        furnace.smelting = false;
-                        furnace.smeltTimer = 0.0f;
-                        furnace.completedActions++;
-                        if (furnace.completedActions >= instruction.argument) {
-                            furnace.cardIndex++;
-                            furnace.commandTimer = 0.0f;
-                            if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
-                                furnace.status = "Done";
-                            }
-                            else {
-                                furnace.completedActions = 0;
-                                furnace.status = "Next card";
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Добыча по установленной карте RUN.
-            for (int row = 0; row < ROWS; row++) {
-                for (int col = 0; col < COLS; col++) {
-                    if (grid[row][col] != TileType::Drill ||
-                        !isBuildingOrigin(col, row)) {
-                        continue;
-                    }
-
-                    DrillStorage& drill = drills[row][col];
-
-                    if (drill.reader.amount == 0) {
-                        drill.status = "Insert card";
-                        continue;
-                    }
-
-                    if (drill.cardIndex >= (int)drill.reader.cards.size()) {
-                        drill.status = "Done";
-                        continue;
-                    }
-
-                    const CardInstruction& instruction =
-                        drill.reader.cards[drill.cardIndex];
-
-                    RollerCell deposit = {-1, -1};
-                    ItemType resource = ItemType::Empty;
-                    if (instruction.command == 1) {
-                        deposit = findDrillDeposit({col, row});
-                        if (deposit.x == -1) {
-                            drill.status = "DEPOSIT DEPLETED";
-                            continue;
-                        }
-                        resource = getDepositItem(drillDeposits[deposit.y][deposit.x]);
-                        if (drill.output.amount > 0 && drill.output.type != resource) {
-                            drill.status = resource == ItemType::IronOre
-                                ? "Clear output. Next resource: iron ore"
-                                : "Clear output. Next resource: coal";
-                            continue;
-                        }
-                        if (drill.output.amount >= GetMaxStack(resource)) {
-                            drill.status = "OUTPUT FULL";
-                            continue;
-                        }
-                    }
-
-                    if (drill.energy == 0) {
-                        if (drill.fuel.amount == 0) {
-                            drill.status = "FUEL EXHAUSTED";
-                            continue;
-                        }
-
-                        drill.fuel.amount--;
-                        if (drill.fuel.amount == 0) {
-                            drill.fuel = {};
-                        }
-                        drill.energy = 3;
-                    }
-
-                    if (instruction.command == 2) {
-                        drill.status = "Reading BACK";
-                        drill.commandTimer += GetFrameTime();
-
-                        if (drill.commandTimer < 0.2f) {
-                            continue;
-                        }
-
-                        if (instruction.argument > drill.cardIndex) {
-                            drill.status = "INVALID BACK";
-                            continue;
-                        }
-
-                        drill.cardIndex -= instruction.argument;
-                        drill.completedActions = 0;
-                        drill.commandTimer = 0.0f;
-                        continue;
-                    }
-
-                    if (instruction.command != 1) {
-                        drill.status = "UNSUPPORTED COMMAND";
-                        continue;
-                    }
-
-                    drill.status = "Mining";
-                    drill.hitTimer += GetFrameTime();
-
-                    if (drill.hitTimer < 0.4f) {
-                        continue;
-                    }
-
-                    drill.hitTimer = 0.0f;
-                    drill.energy--;
-                    drill.completedActions++;
-                    int& hitsLeft = durability[deposit.y][deposit.x];
-                    int& remaining = resourceAmount[deposit.y][deposit.x];
-                    hitsLeft--;
-
-                    if (hitsLeft <= 0) {
-                        drill.output.type = resource;
-                        drill.output.amount++;
-                        remaining--;
-
-                        if (remaining > 0) {
-                            hitsLeft = resource == ItemType::IronOre ? 3 : 2;
-                        }
-                    }
-
-                    if (drill.completedActions >= instruction.argument) {
-                        drill.cardIndex++;
-                        drill.commandTimer = 0.0f;
-
-                        if (drill.cardIndex >= (int)drill.reader.cards.size()) {
-                            drill.status = "Done";
-                        }
-                        else {
-                            drill.completedActions = 0;
-                            drill.status = "Next card";
-                        }
-                    }
-                }
-            }
-
-            // Исполнение программы роликовой линии.
-            for (int row = 0; row < ROWS; row++) {
-                for (int col = 0; col < COLS; col++) {
-                    if (grid[row][col] != TileType::Roller ||
-                        !rollerControllers[row][col]) {
-                        continue;
-                    }
-                    RollerProgram& program = rollerPrograms[row][col];
-                    const InventorySlot& reader = rollerReaders[row][col];
-                    InventorySlot& fuel = rollerFuel[row][col];
-                    if (!rollerDirectionSet[row][col]) {
-                        program.status = "Set direction";
-                        continue;
-                    }
-                    RollerLine line = getRollerLine(col, row);
-                    int controllerCount = 0;
-                    for (const RollerCell& cell : line.cells) {
-                        if (rollerControllers[cell.y][cell.x]) {
-                            controllerCount++;
-                        }
-                    }
-                    if (program.lineCells.empty()) {
-                        program.lineCells = line.cells;
-                    }
-
-                    bool missingCell = false;
-                    for (const RollerCell& expected : program.lineCells) {
-                        if (!HasRollerCell(line.cells, expected)) {
-                            missingCell = true;
-                            break;
-                        }
-                    }
-
-                    if (missingCell) {
-                        program.lineBroken = true;
-                    }
-
-                    if (program.lineBroken) {
-                        if (missingCell) {
-                            program.status = "LINE BROKEN";
-                            continue;
-                        }
-
-                        program.lineBroken = false;
-                        program.lineCells = line.cells;
-                    }
-
-                    if (controllerCount == 1) {
-                        program.lineCells = line.cells;
-                    }
-
-                    if (controllerCount > 1) {
-                        program.status = "CONFLICT";
-                        continue;
-                    }
-                    if (reader.amount == 0) {
-                        program.status = "Insert card";
-                        continue;
-                    }
-                    if (program.cardIndex >= (int)reader.cards.size()) {
-                        program.numberedSlotCommand = 0;
-                        program.status = "Done";
-                        continue;
-                    }
-                    const CardInstruction& instruction =
-                        reader.cards[program.cardIndex];
-                    const bool configuringSlots = instruction.command == TAKE_COMMAND ||
-                        instruction.command == PUT_COMMAND;
-                    if (!configuringSlots) {
-                        program.numberedSlotCommand = 0;
-                    }
-
-                    if (instruction.command == 1) {
-                        bool isLoop = line.ends.empty();
-
-                        auto route = getControllerRoute(col, row);
-                        if (route.empty()) {
-                            program.status = "LINE BROKEN";
-                            continue;
-                        }
-
-                        RollerEnd sourceEnd = {};
-                        RollerEnd targetEnd = {};
-
-                        if (!isLoop) {
-                            sourceEnd = getRouteEnd(route, true);
-                            targetEnd = getRouteEnd(route, false);
-                            const char* connectionError = getRollerEndError(sourceEnd);
-                            if (connectionError == nullptr) {
-                                connectionError = getRollerEndError(targetEnd);
-                            }
-                            if (connectionError != nullptr) {
-                                program.status = connectionError;
-                                continue;
-                            }
-                        }
-
-                        if (program.energy == 0) {
-                            if (fuel.amount == 0) {
-                                program.status = "FUEL EXHAUSTED";
-                                continue;
-                            }
-                            fuel.amount--;
-                            if (fuel.amount == 0) {
-                                fuel = {};
-                            }
-                            program.energy = 20;
-                        }
-
-                        program.status = "Running";
-                        program.commandTimer += GetFrameTime();
-                        if (program.commandTimer < 0.5f) {
-                            continue;
-                        }
-
-                        bool moved = isLoop && moveLoopCargo(route);
-
-                        if (!isLoop) {
-                            if (unloadRollerCargo(targetEnd)) {
-                                moved = true;
-                            }
-
-                            for (int i = (int)route.size() - 1; i > 0; i--) {
-                                RollerCell from = route[i - 1].cell;
-                                RollerCell to = route[i].cell;
-
-                                if (rollerCargo[to.y][to.x].amount == 0 &&
-                                    rollerCargo[from.y][from.x].amount > 0) {
-                                    rollerCargo[to.y][to.x] =
-                                        rollerCargo[from.y][from.x];
-                                    rollerCargo[from.y][from.x] = {};
-                                    moved = true;
-                                }
-                            }
-
-                            if (loadRollerCargo(sourceEnd)) {
-                                moved = true;
-                            }
-                        }
-
-                        if (!moved) {
-                            program.status = "WAITING FOR MOVEMENT";
-                            continue;
-                        }
-
-                        program.energy--;
-                        program.completedActions++;
-                        program.commandTimer = 0.0f;
-
-                        if (program.completedActions >= instruction.argument) {
-                            program.cardIndex++;
-                            program.completedActions = 0;
-                            program.status =
-                                program.cardIndex >= (int)reader.cards.size()
-                                ? "Done" : "Next card";
-                        }
-                        continue;
-                    }
-                    if (program.energy == 0) {
-                        if (fuel.amount == 0) {
-                            program.status = "FUEL EXHAUSTED";
-                            continue;
-                        }
-                        fuel.amount--;
-                        if (fuel.amount == 0) {
-                            fuel = {};
-                        }
-                        program.energy = 20;
-                    }
-                    if (instruction.command == 2) {
-                        program.status = "Reading BACK";
-                        program.commandTimer += GetFrameTime();
-
-                        if (program.commandTimer < 0.2f) {
-                            continue;
-                        }
-                        if (instruction.argument > program.cardIndex) {
-                            program.status = "INVALID BACK";
-                            continue;
-                        }
-
-                        program.cardIndex -= instruction.argument;
-                        program.completedActions = 0;
-                        program.commandTimer = 0.0f;
-                        continue;
-                    }
-                    if (configuringSlots) {
-                        const bool taking = instruction.command == TAKE_COMMAND;
-                        program.status = taking ? "Reading TAKE" : "Reading PUT";
-                        program.commandTimer += GetFrameTime();
-
-                        if (program.commandTimer < 0.2f) {
-                            continue;
-                        }
-                        if (line.ends.empty()) {
-                            program.status = "NO LINE END";
-                            continue;
-                        }
-
-                        auto route = getControllerRoute(col, row);
-                        if (route.empty()) {
-                            program.status = "LINE BROKEN";
-                            continue;
-                        }
-
-                        const RollerEnd end = getRouteEnd(route, taking);
-                        const RollerCell building = NeighborCell(end.cell, end.side);
-                        const int slotCount = getBuildingSlotCount(building);
-                        if (slotCount == 0) {
-                            program.status = "NO BUILDING CONNECTED";
-                            continue;
-                        }
-
-                        const bool isChest = grid[building.y][building.x] == TileType::Chest;
-                        const bool automatic = instruction.argument == 0;
-                        if (instruction.argument > slotCount || (automatic && !isChest)) {
-                            program.status = "INVALID SLOT";
-                            continue;
-                        }
-
-                        RollerSlots& slots = getRollerEndSlots(end);
-                        const RollerEnd previous = program.numberedSlotEnd;
-                        const bool continuingSeries = isChest && !automatic &&
-                            program.numberedSlotCommand == instruction.command &&
-                            previous.cell.x == end.cell.x && previous.cell.y == end.cell.y &&
-                            previous.side == end.side;
-                        if (!continuingSeries) {
-                            slots = {};
-                        }
-                        if (automatic) {
-                            slots.automatic = true;
-                        }
-                        else {
-                            slots.numbered |= 1u << (instruction.argument - 1);
-                        }
-                        program.numberedSlotCommand = isChest && !automatic
-                            ? instruction.command : 0;
-                        program.numberedSlotEnd = end;
-
-                        program.commandTimer = 0.0f;
-                        program.cardIndex++;
-                        program.status =
-                            program.cardIndex >= (int)reader.cards.size()
-                            ? "Done" : "Next card";
-                        continue;
-                    }
-                    if (instruction.command != 3) {
-                        program.status = "UNSUPPORTED COMMAND";
-                        continue;
-                    }
-                    program.status = "Reading REVERSE";
-                    program.commandTimer += GetFrameTime();
-                    if (program.commandTimer < 0.2f) {
-                        continue;
-                    }
-                    rollerEntrySides[row][col] = OtherRollerSide(
-                        rollerShapes[row][col], rollerEntrySides[row][col]
-                    );
-                    program.commandTimer = 0.0f;
-                    program.cardIndex++;
-                    program.status =
-                        program.cardIndex >= (int)reader.cards.size()
-                        ? "Done" : "Next card";
-                }
-            }
-
             if (choosingControllerX != -1 && choosingControllerY != -1 &&
                 !directionSelectionStartedThisFrame) {
                 auto choices = getDirectionChoices(
@@ -3503,6 +3665,12 @@ int main() {
             }
         }
 
+        // Карта мира не останавливает производство. F1 остаётся
+        // отладочной паузой для механизмов в обеих локациях.
+        if (!developerPanelOpen && !panelToggled) {
+            updateAllLocations(GetFrameTime());
+        }
+
         BeginDrawing();
 
         // Цвет земли зависит от текущей локации
@@ -3523,6 +3691,10 @@ int main() {
             for (int col = 0; col < COLS; col++) {
 
                 TileType tile = grid[row][col];
+                // Станция рисуется отдельно.
+                if (tile == TileType::CargoStation) {
+                    continue;
+                }
                 if (tile == TileType::Roller) {
                     DrawRollerTile(
                         col * TILE_SIZE, row * TILE_SIZE,
@@ -3839,6 +4011,24 @@ int main() {
             );
         }
         
+        // Краткий статус перевозки внутри любой локации.
+        if (!worldMapOpen) {
+            DrawRectangle(540, 108, 250, 45, DARKGRAY);
+            if (cargoInTransit > 0 && cargoTravelRemaining > 0.0f) {
+                DrawText(TextFormat("IN TRANSIT: %i / %.1fs",
+                    cargoInTransit, cargoTravelRemaining),
+                    550, 114, 15, WHITE);
+            }
+            else if (cargoInTransit > 0) {
+                DrawText("WAITING TO UNLOAD", 550, 114, 15, YELLOW);
+            }
+            else {
+                DrawText("NO CARGO IN TRANSIT", 550, 114, 15, WHITE);
+            }
+            DrawText(autoCargoDelivery ? "AUTO DELIVERY: ON" : "AUTO DELIVERY: OFF",
+                550, 132, 14, autoCargoDelivery ? GREEN : LIGHTGRAY);
+        }
+
         // Название текущей локации
         const char* locationName =
             currentLocation == Location::Workshop
@@ -3862,6 +4052,30 @@ int main() {
             TextFormat("Iron: %i", ironCount),
             10, 35, 20, DARKBROWN
         );
+        
+        
+        // ==========================================
+        // CARGO STATION — Отрисовка
+        // ==========================================
+
+        // Основание станции
+        DrawRectangleRec(cargoStation, DARKBROWN);
+        DrawRectangleLinesEx(cargoStation, 2, BLACK);
+
+        // Грузовые ящики
+        DrawRectangle(688, 290, 20, 20, BROWN);
+        DrawRectangle(714, 290, 18, 20, BROWN);
+
+        DrawRectangleLines(688, 290, 20, 20, BLACK);
+        DrawRectangleLines(714, 290, 18, 20, BLACK);
+        
+        // Название станции
+        DrawText("CARGO", 686, 318, 14, WHITE);
+
+        // Подсказка, если игрок рядом
+        if (nearCargoStation) {
+            DrawText("PRESS T", 675, 260, 16, DARKGREEN);
+        }
         
         DrawRectangle(x, y, 40, 40, BLUE);
         
@@ -4827,25 +5041,57 @@ int main() {
         
         // Экран карты мира
         if (worldMapOpen) {
-            
-            
+            DrawRectangle(0, 0, 800, 450, DARKBROWN);
+
             // Информация о грузовых складах
             DrawText(
                 TextFormat("MINE: %i IRON", mineCargoIron),
-                100, 290, 18, WHITE
-            );
-
-            DrawText(
-                TextFormat("WORKSHOP: %i IRON", workshopCargoIron),
                 480, 290, 18, WHITE
             );
 
             DrawText(
-                "T - SEND 10 IRON TO WORKSHOP",
-                230, 335, 18, YELLOW
+                TextFormat("WORKSHOP: %i IRON", workshopCargoIron),
+                100, 290, 18, WHITE
             );
 
-            DrawRectangle(0, 0, 800, 450, DARKBROWN);
+            DrawText("T - SEND UP TO 10 IRON", 100, 335, 18, YELLOW);
+            DrawText(autoCargoDelivery ? "A - AUTO: ON" : "A - AUTO: OFF",
+                480, 335, 18, autoCargoDelivery ? GREEN : YELLOW);
+
+            // Маршрут от шахты к мастерской. Складские остатки
+            // не включают груз, который уже отправлен.
+            const float progress = cargoInTransit > 0
+                ? std::clamp(1.0f - cargoTravelRemaining / CARGO_TRAVEL_TIME,
+                    0.0f, 1.0f)
+                : 0.0f;
+            const char* deliveryStatus = "NO CARGO IN TRANSIT";
+            if (cargoInTransit > 0 && cargoTravelRemaining > 0.0f) {
+                deliveryStatus = TextFormat("IN TRANSIT: %i IRON | %.1fs",
+                    cargoInTransit, cargoTravelRemaining);
+            }
+            else if (cargoInTransit > 0) {
+                deliveryStatus = "WAITING FOR FREE STORAGE";
+            }
+            else if (autoCargoDelivery) {
+                deliveryStatus = mineCargoIron < CARGO_BATCH_SIZE
+                    ? "AUTO: WAITING FOR 10 IRON"
+                    : "AUTO: WAITING FOR STORAGE";
+            }
+            DrawText(deliveryStatus,
+                (800 - MeasureText(deliveryStatus, 18)) / 2, 90, 18, WHITE);
+            DrawRectangle(100, 122, 600, 12, GRAY);
+            DrawRectangle(700 - (int)(600 * progress), 122,
+                (int)(600 * progress), 12, GOLD);
+            DrawRectangleLines(100, 122, 600, 12, WHITE);
+
+            DrawLine(320, 215, 480, 215, LIGHTGRAY);
+            DrawLine(322, 215, 334, 208, LIGHTGRAY);
+            DrawLine(322, 215, 334, 222, LIGHTGRAY);
+            if (cargoInTransit > 0) {
+                const int cargoX = 465 - (int)(130 * progress);
+                DrawRectangle(cargoX - 10, 204, 20, 20, GOLD);
+                DrawRectangleLines(cargoX - 10, 204, 20, 20, BLACK);
+            }
 
             DrawText(
                 "WORLD MAP",
