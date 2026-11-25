@@ -16,8 +16,6 @@ enum class ItemType {
     Stone,
     Wood,
     Furnace,
-    BlankCard,
-    PunchedCard,
     IronPlate,
     Drill,
     Chest
@@ -35,12 +33,6 @@ int GetMaxStack(ItemType type) {
         return 10;
     }
 
-    if (type == ItemType::BlankCard) {
-        return 20;
-    }
-    if (type == ItemType::PunchedCard) {
-        return 1;
-    }
 
     return 100;
 }
@@ -75,67 +67,6 @@ Rectangle GetFurnaceSlotRect(int index) {
     return {25.0f, (float)(130 + index * 85), 60.0f, 60.0f};
 }
 
-Rectangle GetFurnaceReaderRect() {
-    return {25, 365, 150, 35};
-}
-
-Rectangle GetPunchHoleRect(int row, int column) {
-    return {
-        (float)(270 + column * 70),
-        (float)(155 + row * 85),
-        40,
-        40
-    };
-}
-
-constexpr int SET_COMMAND = 6;
-constexpr int ADD_COMMAND = 7;
-constexpr int SUB_COMMAND = 8;
-constexpr int MUL_COMMAND = 9;
-constexpr int DIV_COMMAND = 10;
-
-bool IsArithmeticCommand(int command) {
-    return command >= SET_COMMAND && command <= DIV_COMMAND;
-}
-
-// 8-bit unsigned register: arithmetic wraps modulo 256.
-// Invalid instructions never change the register.
-bool ExecuteArithmetic(int& value, int command, int argument) {
-    if (!IsArithmeticCommand(command) || argument < 0 || argument > 15 ||
-        (command == DIV_COMMAND && argument == 0)) return false;
-    switch (command) {
-        case SET_COMMAND: value = argument; break;
-        case ADD_COMMAND: value = (value + argument) & 255; break;
-        case SUB_COMMAND: value = (value + 256 - argument) & 255; break;
-        case MUL_COMMAND: value = (value * argument) & 255; break;
-        case DIV_COMMAND: value /= argument; break;
-    }
-    return true;
-}
-
-const char* FormatCardCommand(int command, int argument) {
-    const char* name = "UNKNOWN";
-    if (command == 1) name = "RUN";
-    else if (command == 2) name = "BACK";
-    else if (command == SET_COMMAND) name = "SET";
-    else if (command == ADD_COMMAND) name = "ADD";
-    else if (command == SUB_COMMAND) name = "SUB";
-    else if (command == MUL_COMMAND) name = "MUL";
-    else if (command == DIV_COMMAND) name = "DIV";
-    return argument == 0 && !IsArithmeticCommand(command) ? name : TextFormat("%s %i", name, argument);
-}
-
-void DrawPunchedCard(int x, int y, int command, int argument) {
-    DrawRectangle(x, y, 36, 22, BEIGE);
-    for (int i = 0; i < 4; i++) {
-        if (command & (8 >> i)) {
-            DrawCircle(x + 6 + i * 8, y + 6, 2, BLACK);
-        }
-        if (argument & (1 << i)) {
-            DrawCircle(x + 6 + i * 8, y + 16, 2, BLACK);
-        }
-    }
-}
 
 struct CellPosition {
     int x;
@@ -155,7 +86,7 @@ const DeveloperItem developerItems[] = {
     {ItemType::IronPlate, "Iron Plate"},
     {ItemType::Furnace,   "Furnace"},
     {ItemType::Drill,     "Drill"},
-    {ItemType::BlankCard, "Blank Card"}
+    {ItemType::Chest,     "Chest"}
 };
 
 Rectangle GetDeveloperButtonRect(int index) {
@@ -314,15 +245,10 @@ int main() {
         CargoStation
     };
     
-    struct CardInstruction {
-        int command = 0;
-        int argument = 0;
-    };
 
     struct InventorySlot {
         ItemType type = ItemType::Empty;
         int amount = 0;
-        std::vector<CardInstruction> cards;
     };
 
     auto drawStoredStack = [](const InventorySlot& item, int slotX, int slotY) {
@@ -360,15 +286,6 @@ int main() {
             );
         }
 
-        if (item.type == ItemType::BlankCard) {
-            DrawRectangle(slotX + 12, slotY + 15, 36, 22, BEIGE);
-        }
-        else if (item.type == ItemType::PunchedCard) {
-            DrawPunchedCard(
-                slotX + 12, slotY + 15,
-                item.cards.front().command, item.cards.front().argument
-            );
-        }
 
         // Показываем количество предметов
         DrawText(
@@ -391,11 +308,6 @@ int main() {
             return;
         }
 
-        if (source.type == ItemType::PunchedCard) {
-            target = source;
-            source = {};
-            return;
-        }
 
         target.type = source.type;
         target.amount += count;
@@ -456,7 +368,6 @@ int main() {
     bool contractsOpen = false;
     bool shopOpen = false;
     bool researchOpen = false;
-    int cardBatchSize = 1;
     float drillHitDuration = 0.4f;
     bool woodlandUnlocked = false;
     constexpr int WOODLAND_PRICE = 100;
@@ -495,7 +406,6 @@ int main() {
         {ItemType::Furnace, "Furnaces", 1, 1, 35, true},
         {ItemType::Drill, "Drills", 1, 3, 40, true},
         {ItemType::Chest, "Chests", 1, 2, 25, true},
-        {ItemType::BlankCard, "Blank cards", 1, 4, 8, true}
     };
     const char* contractClients[] = {
         "Royal Railway Company", "Manchester Steel Works",
@@ -521,7 +431,7 @@ int main() {
         // В первой строке — ресурс, во второй — изделие,
         // третья строка выбирает любую категорию.
         const int productIndex = index == 0 ? randomInt(0, 4) :
-            (index == 1 ? randomInt(5, 8) : randomInt(0, 8));
+            (index == 1 ? randomInt(5, 7) : randomInt(0, 7));
         const ContractProduct& product = contractProducts[productIndex];
         Contract c;
         c.id = nextContractId++;
@@ -551,15 +461,11 @@ int main() {
         int prerequisite;
         bool unlocked = false;
     };
-    std::array<ResearchTechnology, 4> technologies{{
-        {"Card manufacturing", "Craft 2 blank cards from 1 wood", 30, 8,
-            ItemType::Wood, "Wood", 2, -1},
+    std::array<ResearchTechnology, 2> technologies{{
         {"Precision drilling", "All drills: 0.4s > 0.25s per hit", 55, 12,
-            ItemType::IronPlate, "Plates", 3, 0},
+            ItemType::IronPlate, "Plates", 3, -1},
         {"Heavy freight", "All routes: 10 > 20 units per trip", 70, 16,
-            ItemType::IronPlate, "Plates", 4, 0},
-        {"Mechanical computing", "Unlock the 8-bit register and arithmetic cards", 60, 15,
-            ItemType::IronPlate, "Plates", 5, 0}
+            ItemType::IronPlate, "Plates", 4, -1}
     }};
     std::string researchNotice = "Choose a technology to research.";
     auto researchBlocker = [&](int index) -> const char* {
@@ -567,7 +473,7 @@ int main() {
         const auto& t = technologies[index];
         if (t.unlocked) return "Already researched.";
         if (t.prerequisite >= 0 && !technologies[t.prerequisite].unlocked)
-            return "Research Card manufacturing first.";
+            return "Research prerequisite first.";
         if (money < t.moneyCost) return "Not enough money.";
         if (experiencePoints < t.xpCost) return "Not enough XP.";
         if (contractInventoryAmount(t.material) < t.materialCost) return "Not enough materials.";
@@ -591,9 +497,8 @@ int main() {
         money -= t.moneyCost;
         experiencePoints -= t.xpCost;
         t.unlocked = true;
-        if (index == 0) cardBatchSize = 2;
-        if (index == 1) drillHitDuration = 0.25f;
-        if (index == 2) CARGO_BATCH_SIZE = 20;
+        if (index == 0) drillHitDuration = 0.25f;
+        if (index == 1) CARGO_BATCH_SIZE = 20;
         researchNotice = std::string("Researched: ") + t.name;
         return true;
     };
@@ -652,7 +557,7 @@ int main() {
     };
     const ShopProduct shopProducts[] = {
         {0, 5, 4}, {1, 5, 3}, {2, 5, 11}, {3, 5, 7}, {4, 5, 11},
-        {5, 1, 45}, {6, 1, 51}, {7, 1, 32}, {8, 1, 11}
+        {5, 1, 45}, {6, 1, 51}, {7, 1, 32}
     };
     constexpr int SHOP_PRODUCT_COUNT = sizeof(shopProducts) / sizeof(shopProducts[0]);
     std::string shopNotice = "Choose a product to buy a pack.";
@@ -698,91 +603,9 @@ int main() {
         return {548, (float)(150 + index * 92), 200, 24};
     };
 
-    // Mechanical computing prototype: one workshop register, one physical card reader.
-    bool registerOpen = false;
-    int registerValue = 0;
-    InventorySlot registerReader = {};
-    size_t registerPC = 0;
-    bool registerRunning = false;
-    float registerTimer = 0.0f;
-    std::string registerNotice = "Insert a punched card or program.";
-    auto registerInventoryRect = [](int i) -> Rectangle {
-        return {(float)(420 + (i % 5) * 70), (float)(96 + (i / 5) * 66), 60, 60};
-    };
-    auto insertRegisterCard = [&](int index) {
-        if (!technologies[3].unlocked || registerRunning || registerReader.amount != 0 ||
-            index < 0 || index >= INVENTORY_SIZE ||
-            inventory[index].type != ItemType::PunchedCard || inventory[index].amount != 1 ||
-            inventory[index].cards.empty()) return false;
-        registerReader = std::move(inventory[index]);
-        inventory[index] = {};
-        registerPC = 0;
-        registerTimer = 0;
-        registerNotice = "Program inserted. STEP or RUN.";
-        return true;
-    };
-    auto ejectRegisterCard = [&]() {
-        if (registerRunning || registerReader.amount == 0) return false;
-        for (auto& slot : inventory) {
-            if (slot.amount != 0) continue;
-            slot = std::move(registerReader);
-            registerReader = {};
-            registerPC = 0;
-            registerTimer = 0;
-            registerNotice = "Program returned to inventory.";
-            return true;
-        }
-        registerNotice = "Inventory full. Card stays in reader.";
-        return false;
-    };
-    auto stepRegister = [&]() {
-        if (!technologies[3].unlocked || registerPC >= registerReader.cards.size()) {
-            registerRunning = false;
-            registerNotice = registerReader.cards.empty() ? "Insert a program." : "Done. REWIND to repeat.";
-            return false;
-        }
-        const auto& instruction = registerReader.cards[registerPC];
-        if (!ExecuteArithmetic(registerValue, instruction.command, instruction.argument)) {
-            registerRunning = false;
-            registerNotice = instruction.command == DIV_COMMAND && instruction.argument == 0
-                ? "Error: division by zero." : "Error: unsupported instruction.";
-            return false;
-        }
-        ++registerPC;
-        if (registerPC == registerReader.cards.size()) {
-            registerRunning = false;
-            registerNotice = "Program complete.";
-        } else registerNotice = "Instruction executed.";
-        return true;
-    };
-    auto updateRegister = [&](float dt) {
-        if (!registerRunning) return;
-        registerTimer += dt;
-        while (registerRunning && registerTimer >= 0.35f) {
-            registerTimer -= 0.35f;
-            stepRegister();
-        }
-    };
-    auto rewindRegister = [&]() {
-        registerRunning = false;
-        registerPC = 0;
-        registerTimer = 0;
-        registerNotice = "Reader rewound; register value preserved.";
-    };
-    const Rectangle registerStepButton{28, 248, 170, 32};
-    const Rectangle registerRunButton{208, 248, 170, 32};
-    const Rectangle registerRewindButton{28, 288, 170, 32};
-    const Rectangle registerResetButton{208, 288, 170, 32};
-    const Rectangle registerEjectButton{28, 328, 350, 32};
 
     int selectedSlot = -1;
-    int previewSlot = -1;
-    int previewOffset = 0;
     int splitSource = -1;
-    bool puncherOpen = false;
-    int puncherSlot = -1;
-    bool commandHoles[4] = {};
-    bool argumentHoles[4] = {};
     struct CraftOrder {
         ItemType result;
         float duration;
@@ -916,14 +739,10 @@ int main() {
         InventorySlot ore = {};
         InventorySlot fuel = {};
         InventorySlot output = {};
-        InventorySlot reader = {};
         int energy = 0;
-        int completedActions = 0;
-        int cardIndex = 0;
-        float commandTimer = 0.0f;
         bool smelting = false;
         float smeltTimer = 0.0f;
-        const char* status = "Insert card";
+        const char* status = "Idle";
     };
 
     static FurnaceStorage workshopFurnaces[ROWS][COLS] = {};
@@ -931,14 +750,10 @@ int main() {
 
     struct DrillStorage {
         InventorySlot fuel = {};
-        InventorySlot reader = {};
         InventorySlot output = {};
         int energy = 0;
-        int completedActions = 0;
-        int cardIndex = 0;
-        float commandTimer = 0.0f;
         float hitTimer = 0.0f;
-        const char* status = "Insert card";
+        const char* status = "Idle";
     };
 
     static DrillStorage workshopDrills[ROWS][COLS] = {};
@@ -1104,225 +919,80 @@ int main() {
     // ==========================================
     // SIMULATION — Производство независимо от игрока
     // ==========================================
-    // Обновляет только механизмы выбранной территории, без ввода и UI.
+    // Temporary territory-wide control; later Python can schedule these actions.
+    std::array<bool, 4> productionEnabled{};
+    auto productionActive = [&]() -> bool& {
+        return productionEnabled[static_cast<size_t>(currentLocation)];
+    };
+
+    auto updateFurnace = [&](FurnaceStorage& furnace, float dt, bool enabled) {
+        if (!enabled) { furnace.status = "Paused"; return; }
+        if (furnace.output.amount >= GetMaxStack(ItemType::IronPlate)) {
+            furnace.status = "OUTPUT FULL"; return;
+        }
+        if (!furnace.smelting) {
+            if (furnace.ore.amount == 0) { furnace.status = "NO ORE"; return; }
+            if (furnace.energy == 0) {
+                if (furnace.fuel.amount == 0) { furnace.status = "FUEL EXHAUSTED"; return; }
+                if (--furnace.fuel.amount == 0) furnace.fuel = {};
+                furnace.energy = 3;
+            }
+            if (--furnace.ore.amount == 0) furnace.ore = {};
+            --furnace.energy;
+            furnace.smelting = true;
+            furnace.smeltTimer = 3.0f;
+        }
+        furnace.status = "Smelting";
+        furnace.smeltTimer -= dt;
+        if (furnace.smeltTimer <= 0.0f) {
+            furnace.output.type = ItemType::IronPlate;
+            ++furnace.output.amount;
+            furnace.smelting = false;
+            furnace.smeltTimer = 0.0f;
+        }
+    };
+
+    auto updateDrill = [&](CellPosition origin, DrillStorage& drill, float dt, bool enabled) {
+        if (!enabled) { drill.status = "Paused"; return; }
+        const CellPosition deposit = findDrillDeposit(origin);
+        if (deposit.x == -1) { drill.status = "DEPOSIT DEPLETED"; return; }
+        const ItemType resource = getDepositItem(drillDeposits[deposit.y][deposit.x]);
+        if (drill.output.amount > 0 && drill.output.type != resource) {
+            drill.status = "CLEAR OUTPUT"; return;
+        }
+        if (drill.output.amount >= GetMaxStack(resource)) {
+            drill.status = "OUTPUT FULL"; return;
+        }
+        if (drill.energy == 0) {
+            if (drill.fuel.amount == 0) { drill.status = "FUEL EXHAUSTED"; return; }
+            if (--drill.fuel.amount == 0) drill.fuel = {};
+            drill.energy = 3;
+        }
+        drill.status = "Mining";
+        drill.hitTimer += dt;
+        if (drill.hitTimer < drillHitDuration) return;
+        drill.hitTimer = 0.0f;
+        --drill.energy;
+        int& hitsLeft = durability[deposit.y][deposit.x];
+        int& remaining = resourceAmount[deposit.y][deposit.x];
+        if (--hitsLeft <= 0) {
+            drill.output.type = resource;
+            ++drill.output.amount;
+            if (--remaining > 0) hitsLeft = resource == ItemType::IronOre ? 3 : 2;
+        }
+    };
+
     auto updateMachines = [&](float dt) {
-        // Плавка по установленной карте RUN.
-        for (int row = 0; row < ROWS; row++) {
-            for (int col = 0; col < COLS; col++) {
-                if (grid[row][col] != TileType::Furnace ||
-                    !isBuildingOrigin(col, row)) {
-                    continue;
-                }
-                FurnaceStorage& furnace = furnaces[row][col];
-                if (furnace.reader.amount == 0) {
-                    furnace.status = "Insert card";
-                    continue;
-                }
-                if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
-                    furnace.status = "Done";
-                    continue;
-                }
-
-                const CardInstruction& instruction =
-                    furnace.reader.cards[furnace.cardIndex];
-
-                if (instruction.command == 1 &&
-                    furnace.output.amount >= GetMaxStack(ItemType::IronPlate)) {
-                    furnace.status = "OUTPUT FULL";
-                    continue;
-                }
-
-                bool continuingSmelt = instruction.command == 1 && furnace.smelting;
-                if (!continuingSmelt && furnace.energy == 0) {
-                    if (furnace.fuel.amount == 0) {
-                        furnace.status = "FUEL EXHAUSTED";
-                        continue;
-                    }
-                    furnace.fuel.amount--;
-                    if (furnace.fuel.amount == 0) {
-                        furnace.fuel = {};
-                    }
-                    furnace.energy = 3;
-                }
-
-                if (instruction.command == 2) {
-                    furnace.status = "Reading BACK";
-                    furnace.commandTimer += dt;
-                    if (furnace.commandTimer < 0.2f) {
-                        continue;
-                    }
-                    if (instruction.argument > furnace.cardIndex) {
-                        furnace.status = "INVALID BACK";
-                        continue;
-                    }
-                    furnace.cardIndex -= instruction.argument;
-                    furnace.completedActions = 0;
-                    furnace.commandTimer = 0.0f;
-                    continue;
-                }
-
-                if (instruction.command != 1) {
-                    furnace.status = "UNSUPPORTED COMMAND";
-                    continue;
-                }
-
-                if (!furnace.smelting) {
-                    if (furnace.ore.amount == 0) {
-                        furnace.status = "NO ORE";
-                        continue;
-                    }
-                    furnace.ore.amount--;
-                    if (furnace.ore.amount == 0) {
-                        furnace.ore = {};
-                    }
-                    furnace.energy--;
-                    furnace.smelting = true;
-                    furnace.smeltTimer = 3.0f;
-                }
-
-                furnace.status = "Smelting";
-                furnace.smeltTimer -= dt;
-                if (furnace.smeltTimer <= 0.0f) {
-                    furnace.output.type = ItemType::IronPlate;
-                    furnace.output.amount++;
-                    furnace.smelting = false;
-                    furnace.smeltTimer = 0.0f;
-                    furnace.completedActions++;
-                    if (furnace.completedActions >= instruction.argument) {
-                        furnace.cardIndex++;
-                        furnace.commandTimer = 0.0f;
-                        if (furnace.cardIndex >= (int)furnace.reader.cards.size()) {
-                            furnace.status = "Done";
-                        }
-                        else {
-                            furnace.completedActions = 0;
-                            furnace.status = "Next card";
-                        }
-                    }
-                }
+        const bool enabled = productionActive();
+        for (int row = 0; row < ROWS; ++row) {
+            for (int col = 0; col < COLS; ++col) {
+                const TileType tile = grid[row][col];
+                if (tile != TileType::Furnace && tile != TileType::Drill) continue;
+                if (!isBuildingOrigin(col, row)) continue;
+                if (tile == TileType::Furnace) updateFurnace(furnaces[row][col], dt, enabled);
+                else updateDrill({col, row}, drills[row][col], dt, enabled);
             }
         }
-
-        // Добыча по установленной карте RUN.
-        for (int row = 0; row < ROWS; row++) {
-            for (int col = 0; col < COLS; col++) {
-                if (grid[row][col] != TileType::Drill ||
-                    !isBuildingOrigin(col, row)) {
-                    continue;
-                }
-
-                DrillStorage& drill = drills[row][col];
-
-                if (drill.reader.amount == 0) {
-                    drill.status = "Insert card";
-                    continue;
-                }
-
-                if (drill.cardIndex >= (int)drill.reader.cards.size()) {
-                    drill.status = "Done";
-                    continue;
-                }
-
-                const CardInstruction& instruction =
-                    drill.reader.cards[drill.cardIndex];
-
-                CellPosition deposit = {-1, -1};
-                ItemType resource = ItemType::Empty;
-                if (instruction.command == 1) {
-                    deposit = findDrillDeposit({col, row});
-                    if (deposit.x == -1) {
-                        drill.status = "DEPOSIT DEPLETED";
-                        continue;
-                    }
-                    resource = getDepositItem(drillDeposits[deposit.y][deposit.x]);
-                    if (drill.output.amount > 0 && drill.output.type != resource) {
-                        drill.status = resource == ItemType::IronOre
-                            ? "Clear output. Next resource: iron ore"
-                            : "Clear output. Next resource: coal";
-                        continue;
-                    }
-                    if (drill.output.amount >= GetMaxStack(resource)) {
-                        drill.status = "OUTPUT FULL";
-                        continue;
-                    }
-                }
-
-                if (drill.energy == 0) {
-                    if (drill.fuel.amount == 0) {
-                        drill.status = "FUEL EXHAUSTED";
-                        continue;
-                    }
-
-                    drill.fuel.amount--;
-                    if (drill.fuel.amount == 0) {
-                        drill.fuel = {};
-                    }
-                    drill.energy = 3;
-                }
-
-                if (instruction.command == 2) {
-                    drill.status = "Reading BACK";
-                    drill.commandTimer += dt;
-
-                    if (drill.commandTimer < 0.2f) {
-                        continue;
-                    }
-
-                    if (instruction.argument > drill.cardIndex) {
-                        drill.status = "INVALID BACK";
-                        continue;
-                    }
-
-                    drill.cardIndex -= instruction.argument;
-                    drill.completedActions = 0;
-                    drill.commandTimer = 0.0f;
-                    continue;
-                }
-
-                if (instruction.command != 1) {
-                    drill.status = "UNSUPPORTED COMMAND";
-                    continue;
-                }
-
-                drill.status = "Mining";
-                drill.hitTimer += dt;
-
-                if (drill.hitTimer < drillHitDuration) {
-                    continue;
-                }
-
-                drill.hitTimer = 0.0f;
-                drill.energy--;
-                drill.completedActions++;
-                int& hitsLeft = durability[deposit.y][deposit.x];
-                int& remaining = resourceAmount[deposit.y][deposit.x];
-                hitsLeft--;
-
-                if (hitsLeft <= 0) {
-                    drill.output.type = resource;
-                    drill.output.amount++;
-                    remaining--;
-
-                    if (remaining > 0) {
-                        hitsLeft = resource == ItemType::IronOre ? 3 : 2;
-                    }
-                }
-
-                if (drill.completedActions >= instruction.argument) {
-                    drill.cardIndex++;
-                    drill.commandTimer = 0.0f;
-
-                    if (drill.cardIndex >= (int)drill.reader.cards.size()) {
-                        drill.status = "Done";
-                    }
-                    else {
-                        drill.completedActions = 0;
-                        drill.status = "Next card";
-                    }
-                }
-            }
-        }
-
     };
 
     auto updateAllLocations = [&](float dt) {
@@ -1383,16 +1053,12 @@ int main() {
         // Сами механизмы и их программы остаются на своих местах.
         auto closeLocationUI = [&]() {
             inventoryOpen = false;
-            puncherOpen = false;
-            puncherSlot = -1;
             openedFurnaceX = openedFurnaceY = -1;
             openedDrillX = openedDrillY = -1;
             openedChest = {-1, -1};
             selectedChestSlot = -1;
             selectedSlot = -1;
             splitSource = -1;
-            previewSlot = -1;
-            previewOffset = 0;
             dismantleX = dismantleY = -1;
             dismantleTimer = 0.0f;
             hitAnimationTimer = 0.0f;
@@ -1472,69 +1138,22 @@ int main() {
             cellX >= 0 && cellX < COLS &&
             cellY >= 0 && cellY < ROWS;
         bool canBuild = false;
-        int command = 0;
-        int argument = 0;
         int stoneCount = 0;
         int woodCount = 0;
         int plateCount = 0;
         Rectangle craftButton = {615, 132, 170, 24};
-        Rectangle cardButton = {615, 192, 170, 24};
-        Rectangle drillButton = {615, 252, 170, 24};
-        Rectangle chestButton = {615, 281, 170, 25};
-        Rectangle punchButton = {185, 375, 170, 30};
-        int punchedCardSlot = -1;
-        bool validPattern = false;
-        bool hasBlank = false;
-        bool canPunch = false;
+        Rectangle drillButton = {615, 192, 170, 24};
+        Rectangle chestButton = {615, 221, 170, 25};
 
         // Биржа доступна в мастерской. Модальное окно не пропускает
         // нажатия мыши и клавиш в игровую карту.
-        bool registerToggled = false;
-        if (registerOpen && (IsKeyPressed(KEY_K) || IsKeyPressed(KEY_ESCAPE))) {
-            registerOpen = false;
-            registerToggled = true;
-        } else if (!registerOpen && !researchOpen && !shopOpen && !contractsOpen &&
-                   technologies[3].unlocked && currentLocation == Location::Workshop &&
-                   !worldMapOpen && !inventoryOpen && !puncherOpen && !developerPanelOpen &&
-                   !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
-                   IsKeyPressed(KEY_K)) {
-            closeLocationUI();
-            registerOpen = true;
-            registerToggled = true;
-        }
-        if (registerOpen && !registerToggled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-            if (CheckCollisionPointRec(mouse, registerRunButton)) {
-                if (registerRunning) { registerRunning = false; registerNotice = "Paused."; }
-                else if (registerPC < registerReader.cards.size()) {
-                    registerRunning = true;
-                    registerTimer = 0;
-                    registerNotice = "Running program...";
-                } else registerNotice = "Insert a program or REWIND.";
-            } else if (CheckCollisionPointRec(mouse, registerStepButton) && !registerRunning) {
-                stepRegister();
-            } else if (CheckCollisionPointRec(mouse, registerRewindButton)) {
-                rewindRegister();
-            } else if (CheckCollisionPointRec(mouse, registerResetButton) && !registerRunning) {
-                registerValue = 0;
-                registerNotice = "Register reset to zero.";
-            } else if (CheckCollisionPointRec(mouse, registerEjectButton)) {
-                ejectRegisterCard();
-            } else if (!registerRunning) {
-                for (int i = 0; i < INVENTORY_SIZE; ++i) {
-                    if (CheckCollisionPointRec(mouse, registerInventoryRect(i))) {
-                        if (!insertRegisterCard(i)) registerNotice = "Use a punched card and an empty reader.";
-                        break;
-                    }
-                }
-            }
-        }
         bool researchToggled = false;
         if (researchOpen && (IsKeyPressed(KEY_L) || IsKeyPressed(KEY_ESCAPE))) {
             researchOpen = false;
             researchToggled = true;
-        } else if (!researchOpen && !shopOpen && !contractsOpen && !registerOpen && !registerToggled &&
+        } else if (!researchOpen && !shopOpen && !contractsOpen &&
                    currentLocation == Location::Workshop && !worldMapOpen &&
-                   !inventoryOpen && !puncherOpen && !developerPanelOpen &&
+                   !inventoryOpen && !developerPanelOpen &&
                    !locationSelectedThisFrame &&
                    !IsKeyPressed(KEY_F1) && IsKeyPressed(KEY_L)) {
             closeLocationUI();
@@ -1553,8 +1172,8 @@ int main() {
         if (shopOpen && (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_ESCAPE))) {
             shopOpen = false;
             shopToggled = true;
-        } else if (!shopOpen && !contractsOpen && !researchOpen && !researchToggled && !registerOpen && !registerToggled && currentLocation == Location::Workshop &&
-                   !worldMapOpen && !inventoryOpen && !puncherOpen &&
+        } else if (!shopOpen && !contractsOpen && !researchOpen && !researchToggled && currentLocation == Location::Workshop &&
+                   !worldMapOpen && !inventoryOpen &&
                    !developerPanelOpen &&
                    !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
                    IsKeyPressed(KEY_S)) {
@@ -1574,8 +1193,8 @@ int main() {
         if (contractsOpen && (IsKeyPressed(KEY_B) || IsKeyPressed(KEY_ESCAPE))) {
             contractsOpen = false;
             contractToggled = true;
-        } else if (!contractsOpen && !shopOpen && !shopToggled && !researchOpen && !researchToggled && !registerOpen && !registerToggled && currentLocation == Location::Workshop &&
-                   !worldMapOpen && !inventoryOpen && !puncherOpen &&
+        } else if (!contractsOpen && !shopOpen && !shopToggled && !researchOpen && !researchToggled && currentLocation == Location::Workshop &&
+                   !worldMapOpen && !inventoryOpen &&
                    !developerPanelOpen &&
                    !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
                    IsKeyPressed(KEY_B)) {
@@ -1583,7 +1202,7 @@ int main() {
             contractsOpen = true;
             contractToggled = true;
         }
-        bool panelToggled = !contractsOpen && !contractToggled && !shopOpen && !shopToggled && !researchOpen && !researchToggled && !registerOpen && !registerToggled && IsKeyPressed(KEY_F1);
+        bool panelToggled = !contractsOpen && !contractToggled && !shopOpen && !shopToggled && !researchOpen && !researchToggled && IsKeyPressed(KEY_F1);
         if (contractsOpen && !contractToggled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             for (int i = 0; i < (int)contracts.size(); ++i) {
                 if (CheckCollisionPointRec(mouse, contractActionRect(i))) {
@@ -1608,8 +1227,6 @@ int main() {
             developerPanelOpen = !developerPanelOpen;
             if (developerPanelOpen) {
                 inventoryOpen = false;
-                puncherOpen = false;
-                puncherSlot = -1;
                 openedFurnaceX = -1;
                 openedFurnaceY = -1;
                 openedDrillX = -1;
@@ -1618,8 +1235,6 @@ int main() {
                 selectedChestSlot = -1;
                 selectedSlot = -1;
                 splitSource = -1;
-                previewSlot = -1;
-                previewOffset = 0;
             }
         }
 
@@ -1647,7 +1262,7 @@ int main() {
         if (!developerPanelOpen && !panelToggled &&
             !worldMapOpen && !locationSelectedThisFrame &&
             !contractsOpen && !contractToggled && !shopOpen && !shopToggled &&
-            !researchOpen && !researchToggled && !registerOpen && !registerToggled) {
+            !researchOpen && !researchToggled) {
 
             // ==========================================
             // CARGO — Ручная работа со складами рядом со станцией
@@ -1972,21 +1587,9 @@ int main() {
                             if (!fits) {
                                 break;
                             }
-                            if (item.type == ItemType::PunchedCard) {
-                                fits = false;
-                                for (InventorySlot& slot : candidate) {
-                                    if (slot.amount == 0) {
-                                        slot = item;
-                                        fits = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            else {
                                 fits = addToInventory(
                                     candidate, INVENTORY_SIZE, item.type, item.amount
                                 ) == 0;
-                            }
                         }
 
                         if (fits) {
@@ -2021,19 +1624,9 @@ int main() {
                             drill.output.type, drill.output.amount
                         );
 
-                        bool cardFits = drill.reader.amount == 0;
-                        if (!cardFits) {
-                            for (int i = 0; i < INVENTORY_SIZE; i++) {
-                                if (candidate[i].amount == 0) {
-                                    candidate[i] = drill.reader;
-                                    cardFits = true;
-                                    break;
-                                }
-                            }
-                        }
 
                         if (drillLeft == 0 && coalLeft == 0 &&
-                            outputLeft == 0 && cardFits) {
+                            outputLeft == 0) {
                             for (int i = 0; i < INVENTORY_SIZE; i++) {
                                 inventory[i] = candidate[i];
                             }
@@ -2074,19 +1667,9 @@ int main() {
                             ItemType::Coal, furnace.fuel.amount
                         );
 
-                        bool cardFits = furnace.reader.amount == 0;
-                        if (!cardFits) {
-                            for (int i = 0; i < INVENTORY_SIZE; i++) {
-                                if (candidate[i].amount == 0) {
-                                    candidate[i] = furnace.reader;
-                                    cardFits = true;
-                                    break;
-                                }
-                            }
-                        }
 
                         if (furnaceLeft == 0 && oreLeft == 0 && coalLeft == 0 &&
-                            platesLeft == 0 && cardFits) {
+                            platesLeft == 0) {
                             // Всё помещается — применяем результат.
                             for (int i = 0; i < INVENTORY_SIZE; i++) {
                                 inventory[i] = candidate[i];
@@ -2258,57 +1841,13 @@ int main() {
                 }
             }
 
-            if (inventoryOpen &&
-                !puncherOpen &&
-                selectedSlot != -1 &&
-                inventory[selectedSlot].type == ItemType::BlankCard &&
-                IsKeyPressed(KEY_P)) {
-
-                puncherOpen = true;
-                puncherSlot = selectedSlot;
-                for (int i = 0; i < 4; i++) {
-                    commandHoles[i] = false;
-                    argumentHoles[i] = false;
-                }
-                selectedSlot = -1;
-                splitSource = -1;
-            }
-
             if (IsKeyPressed(KEY_E)) {
-                if (puncherOpen) {
-                    puncherOpen = false;
-                    puncherSlot = -1;
-                }
-                else {
-                    inventoryOpen = !inventoryOpen;
-                    if (!inventoryOpen) {
-                        splitSource = -1;
-                    }
-                }
+                inventoryOpen = !inventoryOpen;
+                if (!inventoryOpen) splitSource = -1;
             }
-            
-            if (puncherOpen && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                for (int i = 0; i < 4; i++) {
-                    if (CheckCollisionPointRec(mouse, GetPunchHoleRect(0, i))) {
-                        commandHoles[i] = !commandHoles[i];
-                    }
-                    if (CheckCollisionPointRec(mouse, GetPunchHoleRect(1, i))) {
-                        argumentHoles[i] = !argumentHoles[i];
-                    }
-                }
+            if (!inventoryOpen && IsKeyPressed(KEY_F2)) {
+                productionActive() = !productionActive();
             }
-
-            for (int i = 0; i < 4; i++) {
-                command = command * 2 + (commandHoles[i] ? 1 : 0);
-                if (argumentHoles[i]) {
-                    argument += 1 << i;
-                }
-            }
-
-            validPattern =
-                ((command == 1 || command == 2) && argument > 0) ||
-                (technologies[3].unlocked && IsArithmeticCommand(command) &&
-                 (command != DIV_COMMAND || argument != 0));
 
             // Закрываем окно постройки вместе с инвентарём.
             if (!inventoryOpen) {
@@ -2394,7 +1933,7 @@ int main() {
             }
 
             // Перемещение предметов в инвентаре
-            if (inventoryOpen && !puncherOpen && !chestOpenedThisFrame) {
+            if (inventoryOpen && !chestOpenedThisFrame) {
                 bool leftPressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
                 bool rightPressed = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
 
@@ -2444,30 +1983,6 @@ int main() {
                     }
                 }
 
-                if (selectedSlot != -1 &&
-                    inventory[selectedSlot].type == ItemType::PunchedCard &&
-                    inventory[selectedSlot].cards.size() > 1 &&
-                    IsKeyPressed(KEY_X)) {
-
-                    int freeSlot = -1;
-                    for (int i = 0; i < INVENTORY_SIZE; i++) {
-                        if (inventory[i].amount == 0) {
-                            freeSlot = i;
-                            break;
-                        }
-                    }
-
-                    if (freeSlot != -1) {
-                        InventorySlot& chain = inventory[selectedSlot];
-                        inventory[freeSlot] = {
-                            ItemType::PunchedCard, 1, {chain.cards.back()}
-                        };
-                        chain.cards.pop_back();
-                    }
-                    else {
-                        inventoryFullTimer = 1.0f;
-                    }
-                }
 
                 int selectedBeforeClick = selectedSlot;
 
@@ -2545,47 +2060,6 @@ int main() {
                     }
                 }
 
-                if (openedDrillX != -1 && openedDrillY != -1 &&
-                    leftPressed) {
-
-                    InventorySlot& card =
-                        drills[openedDrillY][openedDrillX].reader;
-                    Rectangle readerRect = {25, 365, 150, 35};
-
-                    if (CheckCollisionPointRec(mouse, readerRect)) {
-                        if (selectedBeforeClick != -1) {
-                            InventorySlot& source = inventory[selectedBeforeClick];
-
-                            if (source.type == ItemType::PunchedCard &&
-                                card.amount == 0) {
-                                card = source;
-                                DrillStorage& drill = drills[openedDrillY][openedDrillX];
-                                drill.completedActions = 0;
-                                drill.cardIndex = 0;
-                                drill.commandTimer = 0.0f;
-                                source = {};
-                                selectedSlot = -1;
-                            }
-                        }
-                        else if (card.amount > 0) {
-                            int freeSlot = -1;
-                            for (int i = 0; i < INVENTORY_SIZE; i++) {
-                                if (inventory[i].amount == 0) {
-                                    freeSlot = i;
-                                    break;
-                                }
-                            }
-
-                            if (freeSlot != -1) {
-                                inventory[freeSlot] = card;
-                                card = {};
-                            }
-                            else {
-                                inventoryFullTimer = 1.0f;
-                            }
-                        }
-                    }
-                }
 
                 // Первый клик выбирает стопку до следующего клика.
                 if (leftPressed && selectedBeforeClick == -1) {
@@ -2656,25 +2130,7 @@ int main() {
 
                             if (selectedSlot != i) {
 
-                                bool joiningCards =
-                                    (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
-                                    inventory[selectedSlot].type == ItemType::PunchedCard &&
-                                    inventory[i].type == ItemType::PunchedCard;
-
-                                if (joiningCards) {
-                                    InventorySlot& source = inventory[selectedSlot];
-                                    InventorySlot& target = inventory[i];
-
-                                    // Сначала выбранная цепочка, затем та, по которой нажали.
-                                    target.cards.insert(
-                                        target.cards.begin(),
-                                        source.cards.begin(),
-                                        source.cards.end()
-                                    );
-                                    source = {};
-                                }
-                                // Одинаковые предметы объединяем.
-                                else if (inventory[selectedSlot].type == inventory[i].type &&
+                                if (inventory[selectedSlot].type == inventory[i].type &&
                                          inventory[i].type != ItemType::Empty) {
 
                                     int freeSpace =
@@ -2757,55 +2213,6 @@ int main() {
                     }
                 }
 
-                // Установка карты сохраняет её команду и аргумент.
-                if (openedFurnaceX != -1 &&
-                    openedFurnaceY != -1 &&
-                    leftPressed &&
-                    CheckCollisionPointRec(mouse, GetFurnaceReaderRect()) &&
-                    selectedBeforeClick != -1 &&
-                    selectedSlot != -1) {
-
-                    FurnaceStorage& furnace =
-                        furnaces[openedFurnaceY][openedFurnaceX];
-                    InventorySlot& source = inventory[selectedSlot];
-                    if (source.type == ItemType::PunchedCard &&
-                        furnace.reader.amount == 0) {
-                        furnace.reader = source;
-                        furnace.completedActions = 0;
-                        furnace.cardIndex = 0;
-                        furnace.commandTimer = 0.0f;
-                        source = {};
-                        selectedSlot = -1;
-                    }
-                }
-
-                // Для извлечения карты нужен отдельный свободный слот.
-                if (openedFurnaceX != -1 &&
-                    openedFurnaceY != -1 &&
-                    leftPressed &&
-                    selectedBeforeClick == -1 &&
-                    CheckCollisionPointRec(mouse, GetFurnaceReaderRect())) {
-
-                    FurnaceStorage& furnace =
-                        furnaces[openedFurnaceY][openedFurnaceX];
-                    if (furnace.reader.amount > 0) {
-                        int freeSlot = -1;
-                        for (int i = 0; i < INVENTORY_SIZE; i++) {
-                            if (inventory[i].amount == 0) {
-                                freeSlot = i;
-                                break;
-                            }
-                        }
-
-                        if (freeSlot != -1) {
-                            inventory[freeSlot] = furnace.reader;
-                            furnace.reader = {};
-                        }
-                        else {
-                            inventoryFullTimer = 1.0f;
-                        }
-                    }
-                }
 
                 if (rightPressed && selectedBeforeClick == -1) {
 
@@ -2883,15 +2290,11 @@ int main() {
             std::vector<Ingredient> ingredients;
             CraftOrder order = {};
 
-            if (inventoryOpen && !puncherOpen && !chestOpenedThisFrame &&
+            if (inventoryOpen && !chestOpenedThisFrame &&
                 IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                 if (CheckCollisionPointRec(mouse, craftButton) && stoneCount >= 3) {
                     ingredients = {{ItemType::Stone, 3}};
                     order = {ItemType::Furnace, 2.0f};
-                }
-                else if (CheckCollisionPointRec(mouse, cardButton) && woodCount >= 1) {
-                    ingredients = {{ItemType::Wood, 1}};
-                    order = {ItemType::BlankCard, 1.0f, cardBatchSize};
                 }
                 else if (CheckCollisionPointRec(mouse, drillButton) && plateCount >= 3) {
                     ingredients = {{ItemType::IronPlate, 3}};
@@ -2943,42 +2346,6 @@ int main() {
                 if (craftTimer == 0.0f) finishCraftOrder();
             }
 
-            // Проверяем место после крафта: готовый заказ мог занять свободный слот.
-            hasBlank =
-                puncherSlot >= 0 &&
-                inventory[puncherSlot].type == ItemType::BlankCard &&
-                inventory[puncherSlot].amount > 0;
-
-            if (puncherOpen && hasBlank) {
-                if (inventory[puncherSlot].amount == 1) {
-                    punchedCardSlot = puncherSlot;
-                }
-                else {
-                    for (int i = 0; i < INVENTORY_SIZE; i++) {
-                        if (inventory[i].amount == 0) {
-                            punchedCardSlot = i;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            canPunch =
-                puncherOpen && hasBlank && validPattern && punchedCardSlot != -1;
-
-            if (canPunch &&
-                IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-                CheckCollisionPointRec(mouse, punchButton)) {
-                inventory[puncherSlot].amount--;
-                if (inventory[puncherSlot].amount == 0) {
-                    inventory[puncherSlot] = {};
-                }
-                inventory[punchedCardSlot] = {
-                    ItemType::PunchedCard, 1, {{command, argument}}
-                };
-                puncherOpen = false;
-                puncherSlot = -1;
-            }
 
         }
 
@@ -2986,7 +2353,6 @@ int main() {
         // отладочной паузой для механизмов в обеих локациях.
         if (!developerPanelOpen && !panelToggled) {
             updateAllLocations(GetFrameTime());
-            updateRegister(GetFrameTime());
         }
 
         BeginDrawing();
@@ -3147,7 +2513,10 @@ int main() {
         DrawText(TextFormat("XP: %lld", experiencePoints), 10, 82, 18, DARKBLUE);
         if (currentLocation == Location::Workshop) {
             DrawText("B - CONTRACTS | S - SHOP | L - RESEARCH", 10, 105, 16, DARKBLUE);
-            if (technologies[3].unlocked) DrawText("K - MECHANICAL REGISTER", 10, 125, 16, DARKBLUE);
+        }
+        if (!worldMapOpen && !inventoryOpen) {
+            DrawText(productionActive() ? "F2 - PRODUCTION ON" : "F2 - PRODUCTION OFF",
+                     10, 125, 16, productionActive() ? DARKGREEN : DARKBLUE);
         }
 
         // Склад активной территории и краткий статус перевозок.
@@ -3392,42 +2761,10 @@ int main() {
             }
             
             if (openedFurnaceX != -1 && openedFurnaceY != -1) {
-                Rectangle readerRect = GetFurnaceReaderRect();
-                DrawRectangleRec(readerRect, GRAY);
-                DrawRectangleLinesEx(readerRect, 1, WHITE);
-
-                const InventorySlot& card =
-                    furnaces[openedFurnaceY][openedFurnaceX].reader;
                 const FurnaceStorage& furnace =
                     furnaces[openedFurnaceY][openedFurnaceX];
-                const CardInstruction* shownCard = nullptr;
-                int shownIndex = furnace.cardIndex;
-                if (card.amount > 0 && !card.cards.empty()) {
-                    if (shownIndex >= (int)card.cards.size()) {
-                        shownIndex = (int)card.cards.size() - 1;
-                    }
-                    shownCard = &card.cards[shownIndex];
-                    DrawText(
-                        TextFormat("Card: %i/%i", shownIndex + 1, (int)card.cards.size()),
-                        100, 270, 16, WHITE
-                    );
-                }
-
                 DrawRectangle(10, 425, 590, 25, DARKGRAY);
                 DrawText(furnace.status, 20, 430, 16, WHITE);
-                if (shownCard != nullptr &&
-                    shownCard->command == 2 && shownCard->argument > shownIndex) {
-                    DrawText(
-                        TextFormat("Card %i: BACK max %i", shownIndex + 1, shownIndex),
-                        250, 430, 16, RED
-                    );
-                }
-                if (shownCard != nullptr && shownCard->command == 1) {
-                    DrawText(
-                        TextFormat("%i/%i", furnace.completedActions, shownCard->argument),
-                        105, 235, 18, WHITE
-                    );
-                }
                 if (furnace.smelting) {
                     float progress = 1.0f - furnace.smeltTimer / 3.0f;
                     if (progress < 0.0f) progress = 0.0f;
@@ -3435,13 +2772,6 @@ int main() {
                     DrawRectangle(100, 215, 75, 10, GRAY);
                     DrawRectangle(100, 215, (int)(75 * progress), 10, GREEN);
                     DrawRectangleLines(100, 215, 75, 10, WHITE);
-                }
-                if (shownCard == nullptr) {
-                    DrawText("Insert card", 35, 375, 16, LIGHTGRAY);
-                }
-                else {
-                    const char* label = FormatCardCommand(shownCard->command, shownCard->argument);
-                    DrawText(label, 35, 375, 18, GOLD);
                 }
             }
 
@@ -3475,22 +2805,6 @@ int main() {
 
                 const DrillStorage& drill = drills[openedDrillY][openedDrillX];
 
-                const CardInstruction* shownCard = nullptr;
-                int shownIndex = drill.cardIndex;
-
-                if (drill.reader.amount > 0 && !drill.reader.cards.empty()) {
-                    if (shownIndex >= (int)drill.reader.cards.size()) {
-                        shownIndex = (int)drill.reader.cards.size() - 1;
-                    }
-                    shownCard = &drill.reader.cards[shownIndex];
-                    DrawText(
-                        TextFormat(
-                            "Card: %i/%i",
-                            shownIndex + 1, (int)drill.reader.cards.size()
-                        ),
-                        25, 340, 16, WHITE
-                    );
-                }
 
                 if (drill.output.amount > 0) {
                     Color color = drill.output.type == ItemType::Coal ? BLACK : BROWN;
@@ -3501,17 +2815,6 @@ int main() {
                     );
                 }
 
-                if (shownCard != nullptr && shownCard->command == 1) {
-                    DrawText(
-                        TextFormat(
-                            "Hits: %i/%i",
-                            drill.completedActions, shownCard->argument
-                        ),
-                        25, 290, 18, WHITE
-                    );
-                }
-
-                if (shownCard != nullptr && shownCard->command == 1) {
 
                     float progress = drill.hitTimer / drillHitDuration;
                     if (progress < 0.0f) progress = 0.0f;
@@ -3520,29 +2823,9 @@ int main() {
                     DrawRectangle(25, 320, 150, 10, GRAY);
                     DrawRectangle(25, 320, (int)(150 * progress), 10, GREEN);
                     DrawRectangleLines(25, 320, 150, 10, WHITE);
-                }
 
                 DrawRectangle(10, 425, 590, 25, DARKGRAY);
                 DrawText(drill.status, 20, 430, 16, WHITE);
-                if (shownCard != nullptr &&
-                    shownCard->command == 2 &&
-                    shownCard->argument > shownIndex) {
-                    DrawText(
-                        TextFormat("Card %i: BACK max %i", shownIndex + 1, shownIndex),
-                        250, 430, 16, RED
-                    );
-                }
-
-                Rectangle reader = {25, 365, 150, 35};
-                DrawRectangleRec(reader, GRAY);
-                DrawRectangleLinesEx(reader, 1, WHITE);
-                if (shownCard == nullptr) {
-                    DrawText("Insert card", 35, 375, 16, LIGHTGRAY);
-                }
-                else {
-                    const char* label = FormatCardCommand(shownCard->command, shownCard->argument);
-                    DrawText(label, 35, 375, 18, GOLD);
-                }
             }
 
             // Панель крафта справа от инвентаря.
@@ -3556,31 +2839,21 @@ int main() {
                 620, 115, 14, stoneCount >= 3 ? GREEN : RED
             );
 
-            DrawText("Blank Card", 620, 156, 18, WHITE);
-            DrawRectangleRec(cardButton, woodCount >= 1 ? GREEN : GRAY);
-            DrawText(TextFormat("Craft Card x%i", cardBatchSize), 625, 196, 16, WHITE);
-            DrawText(
-                TextFormat("Wood: %i/1", woodCount),
-                620, 175, 14, woodCount >= 1 ? GREEN : RED
-            );
 
-            DrawText("Drill", 620, 216, 18, WHITE);
+            DrawText("Drill", 620, 156, 18, WHITE);
             DrawText(
                 TextFormat("Plates: %i/3", plateCount),
-                620, 235, 14, plateCount >= 3 ? GREEN : RED
+                620, 175, 14, plateCount >= 3 ? GREEN : RED
             );
             DrawRectangleRec(drillButton, plateCount >= 3 ? GREEN : GRAY);
-            DrawText("Craft Drill", 625, 256, 16, WHITE);
+            DrawText("Craft Drill", 625, 196, 16, WHITE);
 
             DrawRectangleRec(chestButton, woodCount >= 3 ? GREEN : GRAY);
-            DrawText(TextFormat("Chest  Wood %i/3", woodCount), 623, 286, 14, WHITE);
+            DrawText(TextFormat("Chest  Wood %i/3", woodCount), 623, 226, 14, WHITE);
 
             if (!craftQueue.empty()) {
                 const char* craftingName = "Furnace";
-                if (craftQueue.front().result == ItemType::BlankCard) {
-                    craftingName = "Blank Card";
-                }
-                else if (craftQueue.front().result == ItemType::Drill) {
+                if (craftQueue.front().result == ItemType::Drill) {
                     craftingName = "Drill";
                 }
                 else if (craftQueue.front().result == ItemType::Chest) {
@@ -3681,12 +2954,6 @@ int main() {
                 else if (item.type == ItemType::Chest) {
                     DrawChestItem((int)mouse.x - 17, (int)mouse.y - 12);
                 }
-                else if (item.type == ItemType::BlankCard) {
-                    DrawRectangle(
-                        (int)mouse.x - 18, (int)mouse.y - 11,
-                        36, 22, Fade(BEIGE, 0.7f)
-                    );
-                }
                 else DrawCircle(
                     (int)mouse.x,
                     (int)mouse.y,
@@ -3737,19 +3004,8 @@ int main() {
                         (int)mouse.x - 18, (int)mouse.y - 7, 36, 14, LIGHTGRAY
                     );
                 }
-                else if (item.type == ItemType::PunchedCard) {
-                    DrawPunchedCard(
-                        (int)mouse.x - 18, (int)mouse.y - 11,
-                        item.cards.front().command, item.cards.front().argument
-                    );
-                }
                 else if (item.type == ItemType::Chest) {
                     DrawChestItem((int)mouse.x - 17, (int)mouse.y - 12);
-                }
-                else if (item.type == ItemType::BlankCard) {
-                    DrawRectangle(
-                        (int)mouse.x - 18, (int)mouse.y - 11, 36, 22, BEIGE
-                    );
                 }
                 else DrawCircle(
                     (int)mouse.x,
@@ -3776,69 +3032,6 @@ int main() {
                 if (CheckCollisionPointRec(mouse, slot) &&
                     inventory[i].amount > 0) {
 
-                    if (!puncherOpen &&
-                        inventory[i].type == ItemType::PunchedCard) {
-
-                        const auto& cards = inventory[i].cards;
-                        int count = (int)cards.size();
-
-                        if (previewSlot != i) {
-                            previewSlot = i;
-                            previewOffset = 0;
-                        }
-
-                        int visibleCount = count < 6 ? count : 6;
-                        int maxOffset = count - visibleCount;
-
-                        float wheel = GetMouseWheelMove();
-                        if (wheel > 0) previewOffset--;
-                        if (wheel < 0) previewOffset++;
-                        if (previewOffset < 0) previewOffset = 0;
-                        if (previewOffset > maxOffset) previewOffset = maxOffset;
-
-                        int width = 240;
-                        int height = 40 + visibleCount * 24;
-                        if (maxOffset > 0) height += 24;
-
-                        int tooltipX = (int)mouse.x + 15;
-                        int tooltipY = (int)mouse.y + 15;
-                        if (tooltipX + width > GetScreenWidth()) {
-                            tooltipX = GetScreenWidth() - width;
-                        }
-                        if (tooltipY + height > GetScreenHeight()) {
-                            tooltipY = GetScreenHeight() - height;
-                        }
-
-                        DrawRectangle(tooltipX, tooltipY, width, height, DARKGRAY);
-                        DrawRectangleLines(tooltipX, tooltipY, width, height, GOLD);
-                        DrawText(
-                            TextFormat("Cards: %i", count),
-                            tooltipX + 10, tooltipY + 8, 18, GOLD
-                        );
-
-                        for (int row = 0; row < visibleCount; row++) {
-                            int index = previewOffset + row;
-                            const CardInstruction& instruction = cards[index];
-                            const std::string line = std::to_string(index + 1) + ". " +
-                                FormatCardCommand(instruction.command, instruction.argument);
-                            DrawText(
-                                line.c_str(),
-                                tooltipX + 10, tooltipY + 34 + row * 24,
-                                18, WHITE
-                            );
-                        }
-
-                        if (maxOffset > 0) {
-                            DrawText(
-                                "Mouse wheel: scroll",
-                                tooltipX + 10, tooltipY + height - 24,
-                                16, LIGHTGRAY
-                            );
-                        }
-
-                        // Подсказку для карты уже нарисовали.
-                        break;
-                    }
 
                     const char* itemName = "Unknown";
 
@@ -3867,13 +3060,6 @@ int main() {
                         itemName = "Wooden Chest";
                     }
 
-                    else if (inventory[i].type == ItemType::BlankCard) {
-                        itemName = "Blank Card";
-                    }
-                    else if (inventory[i].type == ItemType::PunchedCard) {
-                        const CardInstruction& card = inventory[i].cards.front();
-                        itemName = FormatCardCommand(card.command, card.argument);
-                    }
 
                     // Размер подсказки
                     int tooltipWidth = MeasureText(itemName, 18) + 20;
@@ -3947,79 +3133,11 @@ int main() {
             
         }
         
-        if (inventoryOpen && !puncherOpen &&
-            selectedSlot != -1 &&
-            inventory[selectedSlot].type == ItemType::PunchedCard) {
-            DrawText(
-                "Shift+Click: join cards | X: detach last",
-                220, 40, 16, WHITE
-            );
-        }
 
         if (inventoryFullTimer > 0.0f) {
             DrawText("INVENTORY FULL", 10, 65, 20, RED);
         }
 
-        if (inventoryOpen && !puncherOpen &&
-            selectedSlot != -1 &&
-            inventory[selectedSlot].type == ItemType::BlankCard) {
-            DrawText("P: Open puncher", 220, 375, 18, GOLD);
-        }
-
-        if (puncherOpen) {
-            DrawRectangle(160, 35, 480, 405, DARKGRAY);
-            DrawText("Card Puncher", 185, 50, 24, WHITE);
-            DrawText("RUN 0001   BACK 0010", 185, 85, 18, LIGHTGRAY);
-            if (technologies[3].unlocked) {
-                DrawText("SET 0110  ADD 0111  SUB 1000  MUL 1001  DIV 1010", 185, 135, 14, SKYBLUE);
-            }
-
-            for (int row = 0; row < 2; row++) {
-                for (int i = 0; i < 4; i++) {
-                    Rectangle hole = GetPunchHoleRect(row, i);
-                    bool marked = row == 0 ? commandHoles[i] : argumentHoles[i];
-                    DrawRectangleRec(hole, BEIGE);
-                    if (marked) {
-                        DrawCircle(
-                            (int)hole.x + 20, (int)hole.y + 20, 12, BLACK
-                        );
-                    }
-                    if (row == 1) {
-                        DrawText(
-                            TextFormat("%i", 1 << i),
-                            (int)hole.x + 15, (int)hole.y + 45, 18, WHITE
-                        );
-                    }
-                }
-            }
-
-            const char* preview = FormatCardCommand(command, argument);
-            DrawText(preview, 185, 325, 24, validPattern ? GREEN : RED);
-            const char* error = "";
-            if (!hasBlank) {
-                error = "NO BLANK CARD";
-            }
-            else if (command != 1 && command != 2 && !IsArithmeticCommand(command)) {
-                error = "UNKNOWN COMMAND";
-            }
-            else if (IsArithmeticCommand(command) && !technologies[3].unlocked) {
-                error = "RESEARCH MECHANICAL COMPUTING";
-            }
-            else if (command == DIV_COMMAND && argument == 0) {
-                error = "DIVISION BY ZERO";
-            }
-            else if ((command == 1 || command == 2) && argument == 0) {
-                error = "ARGUMENT REQUIRED";
-            }
-            else if (punchedCardSlot == -1) {
-                error = "INVENTORY FULL";
-            }
-
-            DrawText(error, 185, 352, 16, RED);
-            DrawRectangleRec(punchButton, canPunch ? GREEN : GRAY);
-            DrawText("Punch", 235, 381, 18, WHITE);
-            DrawText("E: Close", 185, 415, 18, LIGHTGRAY);
-        }
 
         if (developerPanelOpen) {
             DrawRectangle(
@@ -4168,52 +3286,12 @@ int main() {
                 DrawRectangleLinesEx(action, 1, WHITE);
                 DrawText(t.unlocked ? "RESEARCHED" : blocker ? "LOCKED" : "RESEARCH", 565, (int)action.y + 8, 18, WHITE);
                 if (t.prerequisite >= 0 && !technologies[t.prerequisite].unlocked)
-                    DrawText("Needs Card manufacturing", 551, y + 53, 14, YELLOW);
+                    DrawText("Needs prerequisite", 551, y + 53, 14, YELLOW);
             }
             DrawText(researchNotice.c_str(), 28, 390, 17, YELLOW);
             DrawText("L / ESC - CLOSE", 580, 420, 16, WHITE);
         }
 
-        if (registerOpen) {
-            DrawRectangle(0, 0, 800, 450, Color{43, 35, 29, 255});
-            DrawText("MECHANICAL REGISTER", 28, 16, 27, GOLD);
-            DrawText("8-bit unsigned | 0 - 255 | arithmetic modulo 256", 28, 51, 16, LIGHTGRAY);
-            DrawRectangle(24, 81, 368, 155, DARKGRAY);
-            DrawText(TextFormat("VALUE: %03i", registerValue), 38, 94, 32, WHITE);
-            for (int bit = 7; bit >= 0; --bit) {
-                int bx = 38 + (7 - bit) * 42;
-                bool set = (registerValue & (1 << bit)) != 0;
-                DrawRectangle(bx, 140, 34, 35, set ? GOLD : GRAY);
-                DrawText(set ? "1" : "0", bx + 11, 147, 21, BLACK);
-            }
-            DrawText(TextFormat("Reader: %i / %i executed", (int)registerPC,
-                (int)registerReader.cards.size()), 38, 183, 17, LIGHTGRAY);
-            if (registerPC < registerReader.cards.size()) {
-                const auto& next = registerReader.cards[registerPC];
-                DrawText(TextFormat("Next: %s", FormatCardCommand(next.command, next.argument)), 38, 206, 17, GOLD);
-            } else DrawText(registerReader.cards.empty() ? "Reader empty" : "End of program", 38, 206, 17, GOLD);
-            auto drawRegisterButton = [](Rectangle r, const char* label, bool enabled) {
-                DrawRectangleRec(r, enabled ? DARKBLUE : GRAY);
-                DrawRectangleLinesEx(r, 1, LIGHTGRAY);
-                DrawText(label, (int)r.x + 9, (int)r.y + 8, 16, WHITE);
-            };
-            drawRegisterButton(registerStepButton, "STEP", !registerRunning && registerPC < registerReader.cards.size());
-            drawRegisterButton(registerRunButton, registerRunning ? "PAUSE" : "RUN", registerPC < registerReader.cards.size());
-            drawRegisterButton(registerRewindButton, "REWIND", true);
-            drawRegisterButton(registerResetButton, "ZERO REGISTER", !registerRunning);
-            drawRegisterButton(registerEjectButton, "EJECT PROGRAM", !registerRunning && registerReader.amount > 0);
-            DrawText("INVENTORY - click a punched card", 420, 72, 16, GOLD);
-            for (int i = 0; i < INVENTORY_SIZE; ++i) {
-                Rectangle r = registerInventoryRect(i);
-                DrawRectangleRec(r, DARKGRAY);
-                DrawRectangleLinesEx(r, 1, inventory[i].type == ItemType::PunchedCard ? GOLD : GRAY);
-                drawStoredStack(inventory[i], (int)r.x, (int)r.y);
-                if (inventory[i].type == ItemType::PunchedCard && inventory[i].cards.size() > 1)
-                    DrawText(TextFormat("%i cards", (int)inventory[i].cards.size()), (int)r.x+3, (int)r.y+43, 12, GOLD);
-            }
-            DrawText(registerNotice.c_str(), 28, 375, 17, YELLOW);
-            DrawText("K / ESC - CLOSE | Running programs continue in other locations", 28, 420, 16, LIGHTGRAY);
-        }
 
         EndDrawing();
     }
