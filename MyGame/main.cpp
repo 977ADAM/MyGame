@@ -589,6 +589,7 @@ int main() {
     // ECONOMY — Деньги и процедурные контракты
     // ==========================================
     long long money = 0;
+    long long experiencePoints = 0; // Накопленный опыт за выполненные контракты
     int completedContracts = 0;
     bool contractsOpen = false;
     bool shopOpen = false;
@@ -646,6 +647,11 @@ int main() {
         int reward = 0;
         bool accepted = false;
     };
+    // Опыт зависит от согласованной награды: 1 XP за каждые 5 GBP,
+    // с округлением вверх. Условия не меняются после принятия заказа.
+    auto contractExperienceReward = [](const Contract& c) {
+        return std::max(1, (c.reward + 4) / 5);
+    };
     std::array<Contract, 3> contracts{};
     auto generateContract = [&](int index) {
         // В первой строке — ресурс, во второй — изделие,
@@ -691,10 +697,13 @@ int main() {
         }
         c.delivered += deliveredNow;
         if (c.delivered == c.required) {
+            const int earnedXP = contractExperienceReward(c);
             money += c.reward;
+            experiencePoints += earnedXP;
             ++completedContracts;
             contractNotice = "Completed #" + std::to_string(c.id) +
-                ": +GBP " + std::to_string(c.reward);
+                ": +GBP " + std::to_string(c.reward) +
+                " | +" + std::to_string(earnedXP) + " XP";
             generateContract(index);
         } else if (deliveredNow > 0) {
             contractNotice = "Delivered " + std::to_string(deliveredNow) + " units.";
@@ -4332,8 +4341,9 @@ int main() {
         
         DrawText(TextFormat("Score: %i", score), 10, 10, 20, BLACK);
         DrawText(TextFormat("Money: GBP %lld", money), 10, 60, 18, DARKGREEN);
+        DrawText(TextFormat("XP: %lld", experiencePoints), 10, 82, 18, DARKBLUE);
         if (currentLocation == Location::Workshop) {
-            DrawText("B - CONTRACTS | S - SHOP", 10, 82, 16, DARKBLUE);
+            DrawText("B - CONTRACTS | S - SHOP", 10, 105, 16, DARKBLUE);
         }
         
         
@@ -5408,6 +5418,7 @@ int main() {
             DrawRectangle(0, 0, 800, 450, Color{43, 35, 29, 255});
             DrawText("INDUSTRIAL EXCHANGE", 28, 15, 28, GOLD);
             DrawText(TextFormat("GBP %lld | Completed: %i", money, completedContracts), 460, 22, 17, WHITE);
+            DrawText(TextFormat("XP: %lld", experiencePoints), 460, 46, 17, SKYBLUE);
             DrawText(TextFormat("New offers in %is | Accepted orders stay", (int)(contractRefresh + 0.999f)), 28, 56, 17, LIGHTGRAY);
             for (int i = 0; i < (int)contracts.size(); ++i) {
                 const Contract& c = contracts[i];
@@ -5419,6 +5430,7 @@ int main() {
                 DrawText(TextFormat("%s | %s: %i", product.equipment ? "GOODS" : "MATERIALS", product.name, c.required), 38, y + 29, 18, GOLD);
                 DrawText(TextFormat("Delivered: %i/%i | Inventory: %i", c.delivered, c.required, contractInventoryAmount(product.type)), 38, y + 51, 15, LIGHTGRAY);
                 DrawText(TextFormat("GBP %i", c.reward), 411, y + 31, 18, GREEN);
+                DrawText(TextFormat("+%i XP", contractExperienceReward(c)), 411, y + 53, 16, SKYBLUE);
                 Rectangle action = contractActionRect(i);
                 const bool enabled = !c.accepted || contractInventoryAmount(product.type) > 0;
                 DrawRectangleRec(action, enabled ? DARKGREEN : GRAY);
