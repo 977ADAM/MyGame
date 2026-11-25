@@ -318,7 +318,8 @@ int main() {
     enum class Location {
         Workshop,
         IronMine,
-        CoalMine
+        CoalMine,
+        Woodland
     };
 
     // Текущая локация игрока
@@ -590,6 +591,21 @@ int main() {
     long long money = 0;
     int completedContracts = 0;
     bool contractsOpen = false;
+    bool shopOpen = false;
+    bool woodlandUnlocked = false;
+    constexpr int WOODLAND_PRICE = 100;
+    std::string mapNotice;
+    auto buyWoodland = [&]() {
+        if (woodlandUnlocked) return false;
+        if (money < WOODLAND_PRICE) {
+            mapNotice = "Not enough money for woodland access.";
+            return false;
+        }
+        money -= WOODLAND_PRICE;
+        woodlandUnlocked = true;
+        mapNotice = "Woodland unlocked. Click it again to travel.";
+        return true;
+    };
     constexpr float CONTRACT_REFRESH_TIME = 90.0f;
     float contractRefresh = CONTRACT_REFRESH_TIME;
     int nextContractId = 1;
@@ -695,6 +711,52 @@ int main() {
             if (!contracts[i].accepted) generateContract(i);
         }
     };
+    // SHOP — цены за единицу выше максимальной оплаты контракта.
+    struct ShopProduct {
+        int contractProductIndex;
+        int pack, unitPrice;
+    };
+    const ShopProduct shopProducts[] = {
+        {0, 5, 4}, {1, 5, 3}, {2, 5, 11}, {3, 5, 7}, {4, 5, 11},
+        {5, 1, 45}, {6, 1, 51}, {7, 1, 23}, {8, 1, 32}, {9, 1, 11}
+    };
+    constexpr int SHOP_PRODUCT_COUNT = sizeof(shopProducts) / sizeof(shopProducts[0]);
+    std::string shopNotice = "Choose a product to buy a pack.";
+    auto shopFreeSpace = [&](ItemType type) {
+        int space = 0;
+        const int maxStack = GetMaxStack(type);
+        for (const InventorySlot& slot : inventory) {
+            if (slot.amount == 0) space += maxStack;
+            else if (slot.type == type) space += std::max(0, maxStack - slot.amount);
+        }
+        return space;
+    };
+    auto canBuyShopProduct = [&](int index) {
+        if (index < 0 || index >= SHOP_PRODUCT_COUNT) return false;
+        const auto& p = shopProducts[index];
+        return money >= p.pack * p.unitPrice &&
+            shopFreeSpace(contractProducts[p.contractProductIndex].type) >= p.pack;
+    };
+    auto buyShopProduct = [&](int index) {
+        if (index < 0 || index >= SHOP_PRODUCT_COUNT) return false;
+        const auto& p = shopProducts[index];
+        const auto& product = contractProducts[p.contractProductIndex];
+        const int price = p.pack * p.unitPrice;
+        if (money < price) { shopNotice = "Not enough money."; return false; }
+        if (shopFreeSpace(product.type) < p.pack) {
+            shopNotice = "Not enough inventory space."; return false;
+        }
+        // Предварительная проверка гарантирует размещение всей партии.
+        addToInventory(inventory, INVENTORY_SIZE, product.type, p.pack);
+        money -= price;
+        shopNotice = "Bought " + std::to_string(p.pack) + " x " + product.name +
+            " for GBP " + std::to_string(price);
+        return true;
+    };
+    auto shopProductRect = [](int index) -> Rectangle {
+        return {(float)(24 + (index / 5) * 384), (float)(80 + (index % 5) * 61), 368, 55};
+    };
+
     auto contractActionRect = [](int index) -> Rectangle {
         return {548, (float)(116 + index * 92), 200, 30};
     };
@@ -1010,6 +1072,25 @@ int main() {
         }
     }
 
+    // WOODLAND — отдельная территория с конечными запасами.
+    static TileType woodlandGrid[ROWS][COLS] = {};
+    static int woodlandDurability[ROWS][COLS] = {};
+    static int woodlandResourceAmount[ROWS][COLS] = {};
+    for (int row = 3; row < 11; ++row) {
+        for (int col = 3; col < 9; ++col) {
+            woodlandGrid[row][col] = TileType::Tree;
+            woodlandDurability[row][col] = 4;
+            woodlandResourceAmount[row][col] = 1;
+        }
+    }
+    for (int row = 12; row < 16; ++row) {
+        for (int col = 25; col < 31; ++col) {
+            woodlandGrid[row][col] = TileType::Boulder;
+            woodlandDurability[row][col] = 5;
+            woodlandResourceAmount[row][col] = 1;
+        }
+    }
+
     auto isLargeBuilding = [](TileType tile) {
         return tile == TileType::Furnace || tile == TileType::Drill || tile == TileType::Chest;
     };
@@ -1147,6 +1228,22 @@ int main() {
     static DrillStorage coalMineDrills[ROWS][COLS] = {};
     static FurnaceStorage coalMineFurnaces[ROWS][COLS] = {};
     static ChestStorage coalMineChests[ROWS][COLS] = {};
+
+    // Независимые механизмы лесной территории.
+    static RollerCell woodlandBuildingOrigins[ROWS][COLS] = {};
+    static int woodlandRollerShapes[ROWS][COLS] = {};
+    static bool woodlandRollerControllers[ROWS][COLS] = {};
+    static InventorySlot woodlandRollerFuel[ROWS][COLS] = {};
+    static InventorySlot woodlandRollerReaders[ROWS][COLS] = {};
+    static InventorySlot woodlandRollerCargo[ROWS][COLS] = {};
+    static RollerProgram woodlandRollerPrograms[ROWS][COLS] = {};
+    static bool woodlandRollerDirectionSet[ROWS][COLS] = {};
+    static RollerSide woodlandRollerEntrySides[ROWS][COLS] = {};
+    static RollerSlots woodlandRollerEndSlots[ROWS][COLS][4] = {};
+    static TileType woodlandDrillDeposits[ROWS][COLS] = {};
+    static DrillStorage woodlandDrills[ROWS][COLS] = {};
+    static FurnaceStorage woodlandFurnaces[ROWS][COLS] = {};
+    static ChestStorage woodlandChests[ROWS][COLS] = {};
 
     auto getBuildingSlotCount = [&](RollerCell cell) {
         if (cell.x < 0 || cell.x >= COLS ||
@@ -1526,33 +1623,34 @@ int main() {
 
         const bool inMine = destination == Location::IronMine;
         const bool inCoal = destination == Location::CoalMine;
+        const bool inWoodland = destination == Location::Woodland;
 
         // Карта и ресурсы
-        grid = inCoal ? coalMineGrid : (inMine ? ironMineGrid : workshopGrid);
-        durability = inCoal ? coalMineDurability : (inMine ? ironMineDurability : workshopDurability);
-        resourceAmount = inCoal ? coalMineResourceAmount : (inMine ? ironMineResourceAmount : workshopResourceAmount);
+        grid = inWoodland ? woodlandGrid : inCoal ? coalMineGrid : (inMine ? ironMineGrid : workshopGrid);
+        durability = inWoodland ? woodlandDurability : inCoal ? coalMineDurability : (inMine ? ironMineDurability : workshopDurability);
+        resourceAmount = inWoodland ? woodlandResourceAmount : inCoal ? coalMineResourceAmount : (inMine ? ironMineResourceAmount : workshopResourceAmount);
 
         // Крупные постройки
-        buildingOrigins = inCoal ? coalMineBuildingOrigins : (inMine ? ironMineBuildingOrigins : workshopBuildingOrigins);
+        buildingOrigins = inWoodland ? woodlandBuildingOrigins : inCoal ? coalMineBuildingOrigins : (inMine ? ironMineBuildingOrigins : workshopBuildingOrigins);
 
         // Роликовые линии
-        rollerShapes = inCoal ? coalMineRollerShapes : (inMine ? ironMineRollerShapes : workshopRollerShapes);
-        rollerControllers = inCoal ? coalMineRollerControllers : (inMine ? ironMineRollerControllers : workshopRollerControllers);
-        rollerFuel = inCoal ? coalMineRollerFuel : (inMine ? ironMineRollerFuel : workshopRollerFuel);
-        rollerReaders = inCoal ? coalMineRollerReaders : (inMine ? ironMineRollerReaders : workshopRollerReaders);
-        rollerCargo = inCoal ? coalMineRollerCargo : (inMine ? ironMineRollerCargo : workshopRollerCargo);
-        rollerPrograms = inCoal ? coalMineRollerPrograms : (inMine ? ironMineRollerPrograms : workshopRollerPrograms);
-        rollerDirectionSet = inCoal ? coalMineRollerDirectionSet : (inMine ? ironMineRollerDirectionSet : workshopRollerDirectionSet);
-        rollerEntrySides = inCoal ? coalMineRollerEntrySides : (inMine ? ironMineRollerEntrySides : workshopRollerEntrySides);
-        rollerEndSlots = inCoal ? coalMineRollerEndSlots : (inMine ? ironMineRollerEndSlots : workshopRollerEndSlots);
+        rollerShapes = inWoodland ? woodlandRollerShapes : inCoal ? coalMineRollerShapes : (inMine ? ironMineRollerShapes : workshopRollerShapes);
+        rollerControllers = inWoodland ? woodlandRollerControllers : inCoal ? coalMineRollerControllers : (inMine ? ironMineRollerControllers : workshopRollerControllers);
+        rollerFuel = inWoodland ? woodlandRollerFuel : inCoal ? coalMineRollerFuel : (inMine ? ironMineRollerFuel : workshopRollerFuel);
+        rollerReaders = inWoodland ? woodlandRollerReaders : inCoal ? coalMineRollerReaders : (inMine ? ironMineRollerReaders : workshopRollerReaders);
+        rollerCargo = inWoodland ? woodlandRollerCargo : inCoal ? coalMineRollerCargo : (inMine ? ironMineRollerCargo : workshopRollerCargo);
+        rollerPrograms = inWoodland ? woodlandRollerPrograms : inCoal ? coalMineRollerPrograms : (inMine ? ironMineRollerPrograms : workshopRollerPrograms);
+        rollerDirectionSet = inWoodland ? woodlandRollerDirectionSet : inCoal ? coalMineRollerDirectionSet : (inMine ? ironMineRollerDirectionSet : workshopRollerDirectionSet);
+        rollerEntrySides = inWoodland ? woodlandRollerEntrySides : inCoal ? coalMineRollerEntrySides : (inMine ? ironMineRollerEntrySides : workshopRollerEntrySides);
+        rollerEndSlots = inWoodland ? woodlandRollerEndSlots : inCoal ? coalMineRollerEndSlots : (inMine ? ironMineRollerEndSlots : workshopRollerEndSlots);
 
         // Месторождения под бурами
-        drillDeposits = inCoal ? coalMineDrillDeposits : (inMine ? ironMineDrillDeposits : workshopDrillDeposits);
+        drillDeposits = inWoodland ? woodlandDrillDeposits : inCoal ? coalMineDrillDeposits : (inMine ? ironMineDrillDeposits : workshopDrillDeposits);
 
         // Производственные механизмы
-        drills = inCoal ? coalMineDrills : (inMine ? ironMineDrills : workshopDrills);
-        furnaces = inCoal ? coalMineFurnaces : (inMine ? ironMineFurnaces : workshopFurnaces);
-        chests = inCoal ? coalMineChests : (inMine ? ironMineChests : workshopChests);
+        drills = inWoodland ? woodlandDrills : inCoal ? coalMineDrills : (inMine ? ironMineDrills : workshopDrills);
+        furnaces = inWoodland ? woodlandFurnaces : inCoal ? coalMineFurnaces : (inMine ? ironMineFurnaces : workshopFurnaces);
+        chests = inWoodland ? woodlandChests : inCoal ? coalMineChests : (inMine ? ironMineChests : workshopChests);
 
         // Запоминаем выбранную локацию
         currentLocation = destination;
@@ -2051,7 +2149,8 @@ int main() {
     auto updateAllLocations = [&](float dt) {
         const Location playerLocation = currentLocation;
         // Каждая территория получает ровно один шаг симуляции.
-        for (Location location : {Location::Workshop, Location::IronMine, Location::CoalMine}) {
+        for (Location location : {Location::Workshop, Location::IronMine, Location::CoalMine, Location::Woodland}) {
+            if (location == Location::Woodland && !woodlandUnlocked) continue;
             switchLocation(location);
             updateMachines(dt);
         }
@@ -2130,9 +2229,10 @@ int main() {
 
             Vector2 mapMouse = GetMousePosition();
 
-            Rectangle workshopButton = {30, 90, 220, 100};
-            Rectangle mineButton = {290, 90, 220, 100};
-            Rectangle coalButton = {550, 90, 220, 100};
+            Rectangle workshopButton = {12, 90, 185, 100};
+            Rectangle mineButton = {209, 90, 185, 100};
+            Rectangle coalButton = {406, 90, 185, 100};
+            Rectangle woodlandButton = {603, 90, 185, 100};
 
             if (CheckCollisionPointRec(mapMouse, workshopButton)) {
 
@@ -2162,16 +2262,29 @@ int main() {
                 y = 200;
                 locationSelectedThisFrame = true;
             }
+            else if (CheckCollisionPointRec(mapMouse, woodlandButton)) {
+                if (!woodlandUnlocked) {
+                    buyWoodland();
+                } else {
+                    closeLocationUI();
+                    switchLocation(Location::Woodland);
+                    worldMapOpen = false;
+                    x = 400;
+                    y = 200;
+                    locationSelectedThisFrame = true;
+                }
+            }
         }
 
         Rectangle wall = {500, 150, 100, 50};
         
         
         // Грузовая станция
-        Rectangle cargoStation = {680, 280, 60, 60};
+        const bool hasCargoStation = currentLocation != Location::Woodland;
+        Rectangle cargoStation = hasCargoStation ? Rectangle{680, 280, 60, 60} : Rectangle{-200, -200, 60, 60};
 
         // Проверяем, находится ли игрок рядом
-        bool nearCargoStation = CheckCollisionPointCircle(
+        bool nearCargoStation = hasCargoStation && CheckCollisionPointCircle(
             {(float)x + 20, (float)y + 20},
             {710, 310},
             85.0f
@@ -2209,11 +2322,32 @@ int main() {
         bool directionSelectionStartedThisFrame = false;
         // Биржа доступна в мастерской. Модальное окно не пропускает
         // нажатия мыши и клавиш в игровую карту.
+        bool shopToggled = false;
+        if (shopOpen && (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_ESCAPE))) {
+            shopOpen = false;
+            shopToggled = true;
+        } else if (!shopOpen && !contractsOpen && currentLocation == Location::Workshop &&
+                   !worldMapOpen && !inventoryOpen && !puncherOpen &&
+                   !developerPanelOpen && !directionInputBlocked &&
+                   !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
+                   IsKeyPressed(KEY_S)) {
+            closeLocationUI();
+            shopOpen = true;
+            shopToggled = true;
+        }
+        if (shopOpen && !shopToggled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            for (int i = 0; i < SHOP_PRODUCT_COUNT; ++i) {
+                if (CheckCollisionPointRec(mouse, shopProductRect(i))) {
+                    buyShopProduct(i);
+                    break;
+                }
+            }
+        }
         bool contractToggled = false;
         if (contractsOpen && (IsKeyPressed(KEY_B) || IsKeyPressed(KEY_ESCAPE))) {
             contractsOpen = false;
             contractToggled = true;
-        } else if (!contractsOpen && currentLocation == Location::Workshop &&
+        } else if (!contractsOpen && !shopOpen && !shopToggled && currentLocation == Location::Workshop &&
                    !worldMapOpen && !inventoryOpen && !puncherOpen &&
                    !developerPanelOpen && !directionInputBlocked &&
                    !locationSelectedThisFrame && !IsKeyPressed(KEY_F1) &&
@@ -2222,7 +2356,7 @@ int main() {
             contractsOpen = true;
             contractToggled = true;
         }
-        bool panelToggled = !contractsOpen && !contractToggled && IsKeyPressed(KEY_F1);
+        bool panelToggled = !contractsOpen && !contractToggled && !shopOpen && !shopToggled && IsKeyPressed(KEY_F1);
         if (contractsOpen && !contractToggled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             for (int i = 0; i < (int)contracts.size(); ++i) {
                 if (CheckCollisionPointRec(mouse, contractActionRect(i))) {
@@ -2289,7 +2423,7 @@ int main() {
         // На паузе рисуем мир, но не обновляем его состояние.
         if (!developerPanelOpen && !panelToggled &&
             !worldMapOpen && !locationSelectedThisFrame &&
-            !contractsOpen && !contractToggled) {
+            !contractsOpen && !contractToggled && !shopOpen && !shopToggled) {
             
             
             // ==========================================
@@ -3904,6 +4038,9 @@ int main() {
             // Светлая земля мастерской
             groundColor = Color{218, 208, 190, 255};
         }
+        else if (currentLocation == Location::Woodland) {
+            groundColor = Color{164, 186, 139, 255};
+        }
         else if (currentLocation == Location::CoalMine) {
             groundColor = Color{145, 143, 137, 255};
         }
@@ -4196,12 +4333,12 @@ int main() {
         DrawText(TextFormat("Score: %i", score), 10, 10, 20, BLACK);
         DrawText(TextFormat("Money: GBP %lld", money), 10, 60, 18, DARKGREEN);
         if (currentLocation == Location::Workshop) {
-            DrawText("B - CONTRACTS", 10, 82, 16, DARKBLUE);
+            DrawText("B - CONTRACTS | S - SHOP", 10, 82, 16, DARKBLUE);
         }
         
         
         // Склад активной территории и краткий статус перевозок.
-        if (!worldMapOpen) {
+        if (!worldMapOpen && hasCargoStation) {
             DrawRectangle(540, 40, 250, 100, DARKGRAY);
             if (currentLocation == Location::CoalMine) {
                 DrawText(TextFormat("COAL OUT: %i / %i", coalMineCargo, COAL_CARGO_CAPACITY), 550, 48, 16, WHITE);
@@ -4218,7 +4355,8 @@ int main() {
             DrawText(autoCargoDelivery ? "AUTO DELIVERY: ON" : "AUTO DELIVERY: OFF", 550, 166, 14, autoCargoDelivery ? GREEN : LIGHTGRAY);
         }
         const char* locationName = currentLocation == Location::Workshop ? "WORKSHOP" :
-            (currentLocation == Location::IronMine ? "IRON MINE" : "COAL MINE");
+            (currentLocation == Location::IronMine ? "IRON MINE" :
+            (currentLocation == Location::CoalMine ? "COAL MINE" : "WOODLAND"));
 
         DrawText(
             TextFormat("Location: %s", locationName),
@@ -4243,6 +4381,7 @@ int main() {
         // CARGO STATION — Отрисовка
         // ==========================================
 
+        if (hasCargoStation) {
         // Основание станции
         DrawRectangleRec(cargoStation, DARKBROWN);
         DrawRectangleLinesEx(cargoStation, 2, BLACK);
@@ -4262,6 +4401,7 @@ int main() {
             DrawText(currentLocation == Location::CoalMine ? "PRESS T" : "PRESS T / C", 640, 260, 16, DARKGREEN);
         }
         
+        }
         DrawRectangle(x, y, 40, 40, BLUE);
         
         // Анимация удара
@@ -5228,18 +5368,22 @@ int main() {
         if (worldMapOpen) {
             DrawRectangle(0, 0, 800, 450, DARKBROWN);
             DrawText("WORLD MAP", 300, 20, 32, WHITE);
+            DrawText(TextFormat("GBP %lld", money), 610, 27, 19, GOLD);
             auto drawLocation = [&](int left, Color color, const char* name, const char* line1, const char* line2) {
-                DrawRectangle(left, 90, 220, 100, color);
-                DrawRectangleLines(left, 90, 220, 100, WHITE);
-                DrawText(name, left + 12, 100, 22, WHITE);
+                DrawRectangle(left, 90, 185, 100, color);
+                DrawRectangleLines(left, 90, 185, 100, WHITE);
+                DrawText(name, left + 12, 100, 20, WHITE);
                 DrawText(line1, left + 12, 137, 16, WHITE);
                 DrawText(line2, left + 12, 160, 16, WHITE);
             };
             const std::string workshopIronText = TextFormat("IRON IN: %i/200", workshopCargoIron);
             const std::string mineIronText = TextFormat("IRON OUT: %i/200", mineCargoIron);
-            drawLocation(30, BROWN, "WORKSHOP", workshopIronText.c_str(), TextFormat("COAL IN: %i/200", workshopCargoCoal));
-            drawLocation(290, GRAY, "IRON MINE", mineIronText.c_str(), TextFormat("COAL IN: %i/200", ironMineCargoCoal));
-            drawLocation(550, DARKGRAY, "COAL MINE", TextFormat("COAL OUT: %i/200", coalMineCargo), "SLOT 1: LOAD COAL");
+            drawLocation(12, BROWN, "WORKSHOP", workshopIronText.c_str(), TextFormat("COAL IN: %i/200", workshopCargoCoal));
+            drawLocation(209, GRAY, "IRON MINE", mineIronText.c_str(), TextFormat("COAL IN: %i/200", ironMineCargoCoal));
+            drawLocation(406, DARKGRAY, "COAL MINE", TextFormat("COAL OUT: %i/200", coalMineCargo), "SLOT 1: LOAD COAL");
+            drawLocation(603, woodlandUnlocked ? DARKGREEN : GRAY, "WOODLAND",
+                woodlandUnlocked ? "WOOD AND STONE" : "LOCKED",
+                woodlandUnlocked ? "CLICK TO TRAVEL" : "BUY ACCESS GBP 100");
 
             auto drawRoute = [&](int y, const char* name, int amount, float remaining, Color color) {
                 DrawText(name, 30, y, 16, WHITE);
@@ -5255,6 +5399,7 @@ int main() {
             drawRoute(285, "I - COAL MINE > IRON MINE", coalToIronMine.inTransit, coalToIronMine.remaining, LIGHTGRAY);
             DrawText(autoCargoDelivery ? "A - AUTO: ON (ALL ROUTES)" : "A - AUTO: OFF (ALL ROUTES)", 30, 335, 19, autoCargoDelivery ? GREEN : YELLOW);
             DrawText("10 units / 5 seconds per route", 30, 365, 17, WHITE);
+            DrawText(mapNotice.c_str(), 30, 399, 15, YELLOW);
             DrawText("ESC - RETURN", 590, 395, 20, WHITE);
         }
 
@@ -5287,6 +5432,29 @@ int main() {
             }
             DrawText(contractNotice.c_str(), 28, 385, 16, YELLOW);
             DrawText("Inventory deliveries | Payment on completion | B / ESC: Close", 28, 417, 16, WHITE);
+        }
+
+        // Промышленный магазин: покупка целой партии одним нажатием.
+        if (shopOpen) {
+            DrawRectangle(0, 0, 800, 450, Color{43, 35, 29, 255});
+            DrawText("INDUSTRIAL SHOP", 28, 15, 28, GOLD);
+            DrawText(TextFormat("Balance: GBP %lld", money), 520, 22, 18, WHITE);
+            DrawText("Click a product to buy one pack", 28, 52, 16, LIGHTGRAY);
+            for (int i = 0; i < SHOP_PRODUCT_COUNT; ++i) {
+                const auto& p = shopProducts[i];
+                const auto& product = contractProducts[p.contractProductIndex];
+                const Rectangle rect = shopProductRect(i);
+                const bool enabled = canBuyShopProduct(i);
+                DrawRectangleRec(rect, DARKGRAY);
+                DrawRectangleLinesEx(rect, 1, enabled ? GREEN : GRAY);
+                DrawText(product.name, (int)rect.x + 10, (int)rect.y + 7, 18, WHITE);
+                DrawText(TextFormat("Pack: %i | Owned: %i", p.pack, contractInventoryAmount(product.type)),
+                    (int)rect.x + 10, (int)rect.y + 31, 15, LIGHTGRAY);
+                DrawRectangle((int)rect.x + 247, (int)rect.y + 8, 110, 38, enabled ? DARKGREEN : GRAY);
+                DrawText(TextFormat("GBP %i", p.pack * p.unitPrice), (int)rect.x + 258, (int)rect.y + 19, 17, WHITE);
+            }
+            DrawText(shopNotice.c_str(), 28, 395, 16, YELLOW);
+            DrawText("S / ESC - CLOSE", 580, 420, 16, WHITE);
         }
 
         EndDrawing();
